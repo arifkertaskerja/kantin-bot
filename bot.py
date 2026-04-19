@@ -10,7 +10,8 @@ from telegram.ext import (
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -20,8 +21,7 @@ logger = logging.getLogger(__name__)
 WIB = pytz.timezone('Asia/Jakarta')
 
 # Setup Gemini
-genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
 
 # Koneksi Google Sheets
 def get_sheet():
@@ -87,14 +87,13 @@ async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Kirim ke Gemini untuk dibaca
         import base64
         image_base64 = base64.b64encode(file_bytes).decode('utf-8')
-
+        
         prompt = """
         Kamu adalah asisten kasir. Baca nota belanja ini dan ekstrak semua item.
         
         Kembalikan dalam format JSON seperti ini:
         {
-            "tempat_beli": "nama toko",
-            "tanggal": "tanggal pada nota atau kosong",
+            "tempat_beli": "nama toko atau tidak diketahui",
             "items": [
                 {
                     "nama": "nama produk",
@@ -106,27 +105,35 @@ async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "total_semua": angka
         }
         
-        Jika tidak bisa baca dengan jelas, isi dengan data yang bisa terbaca saja.
-        Kembalikan JSON saja tanpa penjelasan lain.
+        Jika ada tulisan tangan, baca sebaik mungkin.
+        Kembalikan JSON saja tanpa penjelasan lain, tanpa markdown.
         """
-
-        response = gemini_model.generate_content([
-            prompt,
-            {
-                "mime_type": "image/jpeg",
-                "data": image_base64
-            }
-        ])
+        
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=[
+                types.Part.from_text(text=prompt),
+                types.Part.from_bytes(
+                    data=base64.b64decode(image_base64),
+                    mime_type='image/jpeg'
+                )
+            ]
+        )
+        
         hasil_text = response.text.strip()
-
-        # Bersihkan response
         if '```json' in hasil_text:
             hasil_text = hasil_text.split('```json')[1].split('```')[0].strip()
         elif '```' in hasil_text:
             hasil_text = hasil_text.split('```')[1].split('```')[0].strip()
-
+        
         hasil = json.loads(hasil_text)
 
+
+
+
+
+
+        
         # Simpan ke Google Sheets
         sheet = get_sheet()
         ws = sheet.worksheet('Kulakan')
