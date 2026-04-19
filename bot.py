@@ -85,9 +85,8 @@ async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_bytes = await file.download_as_bytearray()
 
         # Kirim ke Gemini untuk dibaca
-        import PIL.Image
-        import io
-        image = PIL.Image.open(io.BytesIO(file_bytes))
+        import base64
+        image_base64 = base64.b64encode(file_bytes).decode('utf-8')
 
         prompt = """
         Kamu adalah asisten kasir. Baca nota belanja ini dan ekstrak semua item.
@@ -111,7 +110,13 @@ async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Kembalikan JSON saja tanpa penjelasan lain.
         """
 
-        response = gemini_model.generate_content([prompt, image])
+        response = gemini_model.generate_content([
+            prompt,
+            {
+                "mime_type": "image/jpeg",
+                "data": image_base64
+            }
+        ])
         hasil_text = response.text.strip()
 
         # Bersihkan response
