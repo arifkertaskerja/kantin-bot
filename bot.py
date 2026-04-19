@@ -792,13 +792,13 @@ async def lihat_stok(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stok_apar[nama] = stok_apar.get(nama, 0) + int(row['Jumlah'])
         for row in kantin_masuk:
             nama = row['Nama_Snack']
-            stok_apar[nama] = stok_apar.get(nama, 0) - int(row['Jumlah'])
+            stok_apar[nama] = stok_apar.get(nama, 0) - int(row['Jumlah_Masuk'])
 
         # Hitung stok KANTIN = total masuk kantin - total terjual
         stok_kantin = {}
         for row in kantin_masuk:
             nama = row['Nama_Snack']
-            stok_kantin[nama] = stok_kantin.get(nama, 0) + int(row['Jumlah'])
+            stok_kantin[nama] = stok_kantin.get(nama, 0) + int(row['Jumlah_Masuk'])
         for row in penjualan:
             nama = row['Nama_Snack']
             stok_kantin[nama] = stok_kantin.get(nama, 0) - int(row['Jumlah_Terjual'])
