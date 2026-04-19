@@ -397,6 +397,40 @@ Kembalikan JSON saja tanpa penjelasan."""
         await update.message.reply_text('❌ Gagal membaca foto. Coba lagi dengan foto yang lebih jelas!')
         context.user_data['waiting_foto'] = None
 
+# ================================
+# CEK & TAMBAH PRODUK OTOMATIS
+# ================================
+def get_daftar_produk():
+    """Ambil semua nama produk dari sheet Produk"""
+    try:
+        sheet = get_sheet()
+        ws = sheet.worksheet('Produk')
+        data = ws.get_all_records()
+        return [str(row['Nama_Snack']).lower().strip() for row in data]
+    except:
+        return []
+
+def tambah_produk_otomatis(nama, satuan='pcs'):
+    """Tambah produk baru ke sheet Produk"""
+    try:
+        sheet = get_sheet()
+        ws = sheet.worksheet('Produk')
+        data = ws.get_all_values()
+        id_baru = len(data)
+        ws.append_row([id_baru, nama, satuan])
+        return True
+    except:
+        return False
+
+def cek_produk_baru(items, field_nama='nama'):
+    """Cek item mana saja yang belum ada di sheet Produk"""
+    daftar = get_daftar_produk()
+    produk_baru = []
+    for item in items:
+        nama = str(item.get(field_nama, '')).lower().strip()
+        if nama and nama not in daftar:
+            produk_baru.append(item.get(field_nama))
+    return produk_baru
 
 async def konfirmasi_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -407,7 +441,78 @@ async def konfirmasi_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_foto'] = None
         return
 
-    # Simpan ke Google Sheets
+    if query.data == 'konfirmasi_simpan':
+        hasil = context.user_data.get('hasil_foto')
+        menu = context.user_data.get('menu_foto')
+
+        # Cek produk baru hanya untuk kulakan dan penjualan
+        if menu in ['kulakan', 'jual', 'kantin']:
+            items = hasil.get('items', [])
+            produk_baru = cek_produk_baru(items)
+
+            if produk_baru:
+                # Ada produk baru — simpan dulu di user_data, tanya konfirmasi
+                context.user_data['produk_baru_list'] = produk_baru
+                context.user_data['produk_baru_index'] = 0
+                context.user_data['siap_simpan'] = True
+
+                nama = produk_baru[0]
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Ya, Tambahkan", callback_data='produk_ya'),
+                        InlineKeyboardButton("❌ Lewati", callback_data='produk_skip'),
+                    ]
+                ])
+                await query.edit_message_text(
+                    f'🆕 *Produk baru ditemukan!*\n\n'
+                    f'*"{nama}"* belum ada di daftar produk.\n\n'
+                    f'Tambahkan ke daftar produk?',
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+                return
+
+        # Tidak ada produk baru — langsung simpan
+        await simpan_data_foto(query, context)
+
+    if query.data in ['produk_ya', 'produk_skip']:
+        produk_list = context.user_data.get('produk_baru_list', [])
+        index = context.user_data.get('produk_baru_index', 0)
+        nama = produk_list[index]
+
+        if query.data == 'produk_ya':
+            tambah_produk_otomatis(nama)
+            await query.answer(f'✅ {nama} ditambahkan ke produk!')
+        else:
+            await query.answer(f'⏭ {nama} dilewati.')
+
+        # Cek apakah masih ada produk baru lainnya
+        index += 1
+        context.user_data['produk_baru_index'] = index
+
+        if index < len(produk_list):
+            nama_berikut = produk_list[index]
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ya, Tambahkan", callback_data='produk_ya'),
+                    InlineKeyboardButton("❌ Lewati", callback_data='produk_skip'),
+                ]
+            ])
+            await query.edit_message_text(
+                f'🆕 *Produk baru ditemukan!*\n\n'
+                f'*"{nama_berikut}"* belum ada di daftar produk.\n\n'
+                f'Tambahkan ke daftar produk?',
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+            return
+
+        # Semua produk baru sudah diproses — simpan data
+        await simpan_data_foto(query, context)
+
+
+async def simpan_data_foto(query, context):
+    """Simpan data foto ke Google Sheets setelah konfirmasi"""
     try:
         hasil = context.user_data.get('hasil_foto')
         menu = context.user_data.get('menu_foto')
@@ -443,7 +548,8 @@ async def konfirmasi_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 count += 1
 
         await query.edit_message_text(
-            f'✅ *Berhasil disimpan!*\n\n{count} item tersimpan ke Google Sheets.',
+            f'✅ *Berhasil disimpan!*\n\n'
+            f'{count} item tersimpan ke Google Sheets. 🎉',
             parse_mode='Markdown'
         )
 
@@ -453,6 +559,9 @@ async def konfirmasi_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['waiting_foto'] = None
     context.user_data['hasil_foto'] = None
     context.user_data['menu_foto'] = None
+    context.user_data['produk_baru_list'] = None
+    context.user_data['produk_baru_index'] = 0
+    context.user_data['siap_simpan'] = False
 
 # ================================
 # PROSES EXCEL (semua menu)
@@ -715,7 +824,7 @@ def main():
     app.add_handler(jual_handler)
     app.add_handler(produk_handler)
     app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
-    app.add_handler(CallbackQueryHandler(konfirmasi_foto, pattern='^konfirmasi_'))
+    app.add_handler(CallbackQueryHandler(konfirmasi_foto, pattern='^konfirmasi_|^produk_'))
     app.add_handler(MessageHandler(filters.Document.ALL, proses_excel))
     app.add_handler(MessageHandler(filters.Regex('📋 Lihat Stok'), lihat_stok))
     app.add_handler(MessageHandler(filters.Regex('📊 Lihat Laporan'), laporan))
