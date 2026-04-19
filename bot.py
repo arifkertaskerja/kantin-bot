@@ -149,8 +149,11 @@ async def kulakan_tempat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return KULAKAN_HARGA
 
 async def kulakan_harga(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.strip()
+    if teks.startswith('/'):
+        return KULAKAN_HARGA
     try:
-        context.user_data['kulakan_harga'] = int(update.message.text.strip())
+        context.user_data['kulakan_harga'] = int(teks)
         await update.message.reply_text('Beli berapa banyak?')
         return KULAKAN_JUMLAH
     except:
@@ -247,8 +250,11 @@ async def kantin_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return KANTIN_JUMLAH
 
 async def kantin_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.strip()
+    if teks.startswith('/'):
+        return KANTIN_JUMLAH
     try:
-        jumlah = int(update.message.text.strip())
+        jumlah = int(teks)
         nama = context.user_data['kantin_nama']
         tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
 
@@ -310,8 +316,11 @@ async def jual_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return JUAL_JUMLAH
 
 async def jual_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.strip()
+    if teks.startswith('/'):
+        return JUAL_JUMLAH
     try:
-        jumlah = int(update.message.text.strip())
+        jumlah = int(teks)
         nama = context.user_data['jual_nama']
         tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
 
@@ -933,8 +942,11 @@ async def produk_satuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PRODUK_HARGA_JUAL
 
 async def produk_harga_jual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.strip()
+    if teks.startswith('/'):
+        return PRODUK_HARGA_JUAL
     try:
-        harga_jual = int(update.message.text.strip())
+        harga_jual = int(teks)
         nama = context.user_data['produk_nama']
         satuan = context.user_data['produk_satuan']
         try:
@@ -1007,8 +1019,11 @@ async def ubah_harga_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def ubah_harga_baru(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.strip()
+    if teks.startswith('/'):
+        return UBAH_HARGA_BARU
     try:
-        harga_baru = int(update.message.text.strip())
+        harga_baru = int(teks)
         nama = context.user_data['ubah_harga_nama']
 
         sheet = get_sheet()
