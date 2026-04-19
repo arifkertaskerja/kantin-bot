@@ -782,24 +782,51 @@ async def lihat_stok(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sheet = get_sheet()
         kulakan = sheet.worksheet('Kulakan').get_all_records()
+        kantin_masuk = sheet.worksheet('Kantin').get_all_records()
         penjualan = sheet.worksheet('Penjualan').get_all_records()
 
-        stok = {}
+        # Hitung stok APAR = total kulakan - total pindah ke kantin
+        stok_apar = {}
         for row in kulakan:
             nama = row['Nama_Snack']
-            stok[nama] = stok.get(nama, 0) + int(row['Jumlah'])
+            stok_apar[nama] = stok_apar.get(nama, 0) + int(row['Jumlah'])
+        for row in kantin_masuk:
+            nama = row['Nama_Snack']
+            stok_apar[nama] = stok_apar.get(nama, 0) - int(row['Jumlah'])
+
+        # Hitung stok KANTIN = total masuk kantin - total terjual
+        stok_kantin = {}
+        for row in kantin_masuk:
+            nama = row['Nama_Snack']
+            stok_kantin[nama] = stok_kantin.get(nama, 0) + int(row['Jumlah'])
         for row in penjualan:
             nama = row['Nama_Snack']
-            stok[nama] = stok.get(nama, 0) - int(row['Jumlah_Terjual'])
+            stok_kantin[nama] = stok_kantin.get(nama, 0) - int(row['Jumlah_Terjual'])
 
-        if not stok:
+        # Gabungkan semua nama produk
+        semua_produk = set(list(stok_apar.keys()) + list(stok_kantin.keys()))
+
+        if not semua_produk:
             await update.message.reply_text('Belum ada data stok.')
             return
 
         pesan = '📋 *Stok Saat Ini:*\n\n'
-        for nama, jumlah in stok.items():
-            emoji = '✅' if jumlah > 5 else '⚠️'
-            pesan += f'{emoji} {nama}: *{jumlah}* pcs\n'
+        for nama in sorted(semua_produk):
+            apar = stok_apar.get(nama, 0)
+            kantin = stok_kantin.get(nama, 0)
+            total = apar + kantin
+
+            # Emoji peringatan kalau stok menipis
+            if total <= 0:
+                emoji = '🔴'
+            elif total <= 5:
+                emoji = '⚠️'
+            else:
+                emoji = '✅'
+
+            pesan += f'{emoji} *{nama}*\n'
+            pesan += f'   🏠 Apar  : {apar} pcs\n'
+            pesan += f'   🏪 Kantin: {kantin} pcs\n\n'
 
         await update.message.reply_text(pesan, parse_mode='Markdown')
     except Exception as e:
