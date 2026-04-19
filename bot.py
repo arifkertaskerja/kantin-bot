@@ -46,9 +46,10 @@ def get_sheet():
 # States
 (KULAKAN_NAMA, KULAKAN_TEMPAT, KULAKAN_HARGA, KULAKAN_JUMLAH,
  KANTIN_NAMA, KANTIN_JUMLAH,
- JUAL_NAMA, JUAL_JUMLAH, JUAL_HARGA,
- PRODUK_NAMA, PRODUK_SATUAN,
- KULAKAN_PILIH, KANTIN_PILIH, JUAL_PILIH) = range(14)
+ JUAL_NAMA, JUAL_JUMLAH,
+ PRODUK_NAMA, PRODUK_SATUAN, PRODUK_HARGA_JUAL,
+ KULAKAN_PILIH, KANTIN_PILIH, JUAL_PILIH,
+ UBAH_HARGA_NAMA, UBAH_HARGA_BARU) = range(16)
 
 # ================================
 # MENU UTAMA
@@ -58,6 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ['📦 Catat Kulakan', '🏪 Stok ke Kantin'],
         ['💰 Catat Penjualan', '📊 Lihat Laporan'],
         ['📋 Lihat Stok', '➕ Tambah Produk'],
+        ['💲 Ubah Harga Jual'],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -309,22 +311,29 @@ async def jual_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def jual_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.user_data['jual_jumlah'] = int(update.message.text.strip())
-        await update.message.reply_text('Harga jual per pcs? (angka saja)')
-        return JUAL_HARGA
-    except:
-        await update.message.reply_text('❌ Masukkan angka saja ya!')
-        return JUAL_JUMLAH
-
-async def jual_harga(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        harga = int(update.message.text.strip())
+        jumlah = int(update.message.text.strip())
         nama = context.user_data['jual_nama']
-        jumlah = context.user_data['jual_jumlah']
-        total = harga * jumlah
         tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
 
+        # Ambil harga jual dari sheet Product
         sheet = get_sheet()
+        ws_produk = sheet.worksheet('Product')
+        data_produk = ws_produk.get_all_records()
+        harga = 0
+        for p in data_produk:
+            if norm_nama(p['Nama_Snack']) == nama:
+                harga = int(p.get('Harga_Jual', 0))
+                break
+
+        if harga == 0:
+            await update.message.reply_text(
+                f'⚠️ Harga jual *{nama}* belum diset!\n\n'
+                f'Silakan set dulu via menu *💲 Ubah Harga Jual*',
+                parse_mode='Markdown'
+            )
+            return ConversationHandler.END
+
+        total = harga * jumlah
         ws = sheet.worksheet('Penjualan')
         ws.append_row([tanggal, nama, jumlah, harga, total])
 
@@ -463,14 +472,14 @@ def get_daftar_produk():
     except:
         return []
 
-def tambah_produk_otomatis(nama, satuan='pcs'):
-    """Tambah produk baru ke sheet Produk"""
+def tambah_produk_otomatis(nama, satuan='pcs', harga_jual=0):
+    """Tambah produk baru ke sheet Product"""
     try:
         sheet = get_sheet()
         ws = sheet.worksheet('Product')
         data = ws.get_all_values()
         id_baru = len(data)
-        ws.append_row([id_baru, nama, satuan])
+        ws.append_row([id_baru, nama, satuan, harga_jual])
         return True
     except:
         return False
@@ -807,7 +816,10 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # TAMBAH PRODUK
 # ================================
 async def tambah_produk_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Nama snack baru?')
+    await update.message.reply_text(
+        '➕ *Tambah Produk Baru*\n\nNama snack baru?\n\n_Ketik /batal untuk membatalkan_',
+        parse_mode='Markdown'
+    )
     return PRODUK_NAMA
 
 async def produk_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -816,16 +828,110 @@ async def produk_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PRODUK_SATUAN
 
 async def produk_satuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    nama = context.user_data['produk_nama']
-    satuan = update.message.text.strip()
+    context.user_data['produk_satuan'] = update.message.text.strip()
+    await update.message.reply_text('Harga jual per pcs? (angka saja, contoh: 5000)')
+    return PRODUK_HARGA_JUAL
+
+async def produk_harga_jual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        harga_jual = int(update.message.text.strip())
+        nama = context.user_data['produk_nama']
+        satuan = context.user_data['produk_satuan']
+        try:
+            sheet = get_sheet()
+            ws = sheet.worksheet('Product')
+            data = ws.get_all_values()
+            ws.append_row([len(data), nama, satuan, harga_jual])
+            await update.message.reply_text(
+                f'✅ *Produk berhasil ditambahkan!*\n\n'
+                f'🍿 Nama: {nama}\n'
+                f'📦 Satuan: {satuan}\n'
+                f'💵 Harga jual: Rp{harga_jual:,}',
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            await update.message.reply_text(f'❌ Gagal: {e}')
+    except:
+        await update.message.reply_text('❌ Masukkan angka saja ya!')
+        return PRODUK_HARGA_JUAL
+    return ConversationHandler.END
+
+# ================================
+# UBAH HARGA JUAL
+# ================================
+async def ubah_harga_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sheet = get_sheet()
         ws = sheet.worksheet('Product')
-        data = ws.get_all_values()
-        ws.append_row([len(data), nama, satuan])
-        await update.message.reply_text(f'✅ Produk *{nama}* berhasil ditambahkan!', parse_mode='Markdown')
+        data = ws.get_all_records()
+
+        if not data:
+            await update.message.reply_text('⚠️ Belum ada produk. Tambah produk dulu via ➕ Tambah Produk.')
+            return ConversationHandler.END
+
+        pesan = '💲 *Ubah Harga Jual*\n\nDaftar produk saat ini:\n\n'
+        for i, row in enumerate(data, 1):
+            harga = row.get('Harga_Jual', 0)
+            pesan += f'{i}. {row["Nama_Snack"]} — Rp{int(harga):,}\n'
+
+        pesan += '\nKetik nama produk yang ingin diubah harganya:\n\n_Ketik /batal untuk membatalkan_'
+        await update.message.reply_text(pesan, parse_mode='Markdown')
+        return UBAH_HARGA_NAMA
     except Exception as e:
         await update.message.reply_text(f'❌ Gagal: {e}')
+        return ConversationHandler.END
+
+async def ubah_harga_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nama = norm_nama(update.message.text.strip())
+    try:
+        sheet = get_sheet()
+        ws = sheet.worksheet('Product')
+        data = ws.get_all_records()
+        ditemukan = any(norm_nama(row['Nama_Snack']) == nama for row in data)
+
+        if not ditemukan:
+            await update.message.reply_text(
+                f'❌ Produk *{nama}* tidak ditemukan.\nCoba ketik nama yang sesuai daftar.',
+                parse_mode='Markdown'
+            )
+            return UBAH_HARGA_NAMA
+
+        context.user_data['ubah_harga_nama'] = nama
+        await update.message.reply_text(
+            f'Masukkan harga jual baru untuk *{nama}*:\n(angka saja, contoh: 5000)',
+            parse_mode='Markdown'
+        )
+        return UBAH_HARGA_BARU
+    except Exception as e:
+        await update.message.reply_text(f'❌ Gagal: {e}')
+        return ConversationHandler.END
+
+async def ubah_harga_baru(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        harga_baru = int(update.message.text.strip())
+        nama = context.user_data['ubah_harga_nama']
+
+        sheet = get_sheet()
+        ws = sheet.worksheet('Product')
+        data = ws.get_all_records()
+
+        # Cari baris produk dan update harganya
+        for i, row in enumerate(data, 2):  # mulai dari baris 2 (skip header)
+            if norm_nama(row['Nama_Snack']) == nama:
+                # Kolom Harga_Jual = kolom D = kolom 4
+                ws.update_cell(i, 4, harga_baru)
+                await update.message.reply_text(
+                    f'✅ *Harga berhasil diubah!*\n\n'
+                    f'🍿 Produk: {nama}\n'
+                    f'💵 Harga baru: Rp{harga_baru:,}',
+                    parse_mode='Markdown'
+                )
+                return ConversationHandler.END
+
+        await update.message.reply_text('❌ Produk tidak ditemukan.')
+    except:
+        await update.message.reply_text('❌ Masukkan angka saja ya!')
+        return UBAH_HARGA_BARU
     return ConversationHandler.END
 
 # ================================
@@ -995,7 +1101,6 @@ def main():
             JUAL_PILIH: [CallbackQueryHandler(jual_pilih)],
             JUAL_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_nama)],
             JUAL_JUMLAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_jumlah)],
-            JUAL_HARGA: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_harga)],
         },
         fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
@@ -1005,6 +1110,16 @@ def main():
         states={
             PRODUK_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_nama)],
             PRODUK_SATUAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_satuan)],
+            PRODUK_HARGA_JUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_harga_jual)],
+        },
+        fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
+    )
+
+    ubah_harga_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('💲 Ubah Harga Jual'), ubah_harga_start)],
+        states={
+            UBAH_HARGA_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, ubah_harga_nama)],
+            UBAH_HARGA_BARU: [MessageHandler(filters.TEXT & ~filters.COMMAND, ubah_harga_baru)],
         },
         fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
@@ -1015,6 +1130,7 @@ def main():
     app.add_handler(kantin_handler)
     app.add_handler(jual_handler)
     app.add_handler(produk_handler)
+    app.add_handler(ubah_harga_handler)
     app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
     app.add_handler(CallbackQueryHandler(konfirmasi_foto, pattern='^konfirmasi_|^produk_'))
     app.add_handler(CallbackQueryHandler(konfirmasi_produk_manual, pattern='^manual_produk_'))
