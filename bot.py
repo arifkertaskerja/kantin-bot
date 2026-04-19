@@ -2,9 +2,9 @@ import logging
 import os
 from datetime import datetime
 import pytz
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, ConversationHandler
 )
 import gspread
@@ -12,6 +12,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 import json
 from google import genai
 from google.genai import types
+import base64
+import openpyxl
+import io
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -36,11 +39,12 @@ def get_sheet():
     sheet = client.open('Data Kantin')
     return sheet
 
-# State untuk conversation
+# States
 (KULAKAN_NAMA, KULAKAN_TEMPAT, KULAKAN_HARGA, KULAKAN_JUMLAH,
  KANTIN_NAMA, KANTIN_JUMLAH,
  JUAL_NAMA, JUAL_JUMLAH, JUAL_HARGA,
- PRODUK_NAMA, PRODUK_SATUAN) = range(11)
+ PRODUK_NAMA, PRODUK_SATUAN,
+ KULAKAN_PILIH, KANTIN_PILIH, JUAL_PILIH) = range(14)
 
 # ================================
 # MENU UTAMA
@@ -50,7 +54,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ['📦 Catat Kulakan', '🏪 Stok ke Kantin'],
         ['💰 Catat Penjualan', '📊 Lihat Laporan'],
         ['📋 Lihat Stok', '➕ Tambah Produk'],
-        ['📸 Foto Nota']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -60,153 +63,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ================================
-# FOTO NOTA — BACA PAKAI GEMINI
+# PILIH CARA INPUT
 # ================================
-async def foto_nota_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        '📸 *Kirim Foto Nota*\n\n'
-        'Silakan kirim foto nota belanja kamu.\n'
-        'Bot akan otomatis membaca dan menyimpan datanya!\n\n'
-        '_Pastikan foto jelas dan tidak blur ya_ 😊',
-        parse_mode='Markdown'
-    )
-    context.user_data['waiting_nota'] = True
-
-async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get('waiting_nota'):
-        return
-
-    await update.message.reply_text('⏳ Sedang membaca nota, tunggu sebentar...')
-
-    try:
-        # Download foto dari Telegram
-        photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        file_bytes = await file.download_as_bytearray()
-
-        # Kirim ke Gemini untuk dibaca
-        import base64
-        image_base64 = base64.b64encode(file_bytes).decode('utf-8')
-        
-        prompt = """
-        Kamu adalah asisten kasir. Baca nota belanja ini dan ekstrak semua item.
-        
-        Kembalikan dalam format JSON seperti ini:
-        {
-            "tempat_beli": "nama toko atau tidak diketahui",
-            "items": [
-                {
-                    "nama": "nama produk",
-                    "jumlah": angka,
-                    "harga_satuan": angka,
-                    "total": angka
-                }
-            ],
-            "total_semua": angka
-        }
-        
-        Jika ada tulisan tangan, baca sebaik mungkin.
-        Kembalikan JSON saja tanpa penjelasan lain, tanpa markdown.
-        """
-        
-        response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[
-                types.Part.from_text(text=prompt),
-                types.Part.from_bytes(
-                    data=base64.b64decode(image_base64),
-                    mime_type='image/jpeg'
-                )
-            ]
-        )
-        
-        hasil_text = response.text.strip()
-        if '```json' in hasil_text:
-            hasil_text = hasil_text.split('```json')[1].split('```')[0].strip()
-        elif '```' in hasil_text:
-            hasil_text = hasil_text.split('```')[1].split('```')[0].strip()
-        
-        hasil = json.loads(hasil_text)
-
-
-
-
-
-
-        
-        # Simpan ke Google Sheets
-        sheet = get_sheet()
-        ws = sheet.worksheet('Kulakan')
-        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
-        tempat = hasil.get('tempat_beli', 'Tidak diketahui')
-
-        pesan = f'✅ *Nota berhasil dibaca!*\n\n'
-        pesan += f'🏪 Tempat: {tempat}\n\n'
-        pesan += f'📦 *Item yang tersimpan:*\n'
-
-        for item in hasil.get('items', []):
-            nama = item.get('nama', '-')
-            jumlah = item.get('jumlah', 0)
-            harga = item.get('harga_satuan', 0)
-            total = item.get('total', harga * jumlah)
-
-            ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
-            pesan += f'• {nama} x{jumlah} @ Rp{harga:,} = Rp{total:,}\n'
-
-        total_semua = hasil.get('total_semua', 0)
-        pesan += f'\n💰 *Total: Rp{total_semua:,}*'
-        pesan += f'\n\n_Semua item sudah tersimpan ke sheet Kulakan_ ✅'
-
-        await update.message.reply_text(pesan, parse_mode='Markdown')
-
-    except json.JSONDecodeError:
-        await update.message.reply_text(
-            '⚠️ Bot bisa baca notanya tapi format kurang jelas.\n'
-            'Coba foto lebih dekat dan pastikan tulisan terlihat jelas ya!'
-        )
-    except Exception as e:
-        logger.error(f'Error proses foto: {e}')
-        await update.message.reply_text(
-            '❌ Gagal membaca nota. Pastikan:\n'
-            '• Foto cukup terang\n'
-            '• Tulisan tidak blur\n'
-            '• Coba foto ulang lebih dekat'
-        )
-
-    context.user_data['waiting_nota'] = False
+def keyboard_cara_input():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Manual", callback_data='manual'),
+            InlineKeyboardButton("📸 Foto Nota", callback_data='foto'),
+            InlineKeyboardButton("📊 Excel", callback_data='excel'),
+        ]
+    ])
 
 # ================================
-# TAMBAH PRODUK BARU
-# ================================
-async def tambah_produk_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Nama snack baru? (contoh: Chitato, Taro, dll)')
-    return PRODUK_NAMA
-
-async def produk_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['produk_nama'] = update.message.text.strip()
-    await update.message.reply_text('Satuannya apa? (contoh: pcs, bungkus, pak)')
-    return PRODUK_SATUAN
-
-async def produk_satuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    nama = context.user_data['produk_nama']
-    satuan = update.message.text.strip()
-    try:
-        sheet = get_sheet()
-        ws = sheet.worksheet('Produk')
-        data = ws.get_all_values()
-        id_baru = len(data)
-        ws.append_row([id_baru, nama, satuan])
-        await update.message.reply_text(f'✅ Produk *{nama}* berhasil ditambahkan!', parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f'❌ Gagal: {e}')
-    return ConversationHandler.END
-
-# ================================
-# CATAT KULAKAN
+# KULAKAN
 # ================================
 async def kulakan_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('📦 *Catat Kulakan Baru*\n\nNama snack yang dibeli?', parse_mode='Markdown')
-    return KULAKAN_NAMA
+    context.user_data['menu'] = 'kulakan'
+    await update.message.reply_text(
+        '📦 *Catat Kulakan*\n\nPilih cara input:',
+        reply_markup=keyboard_cara_input(),
+        parse_mode='Markdown'
+    )
+    return KULAKAN_PILIH
+
+async def kulakan_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pilihan = query.data
+
+    if pilihan == 'manual':
+        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang dibeli?')
+        return KULAKAN_NAMA
+    elif pilihan == 'foto':
+        await query.edit_message_text('📸 Kirim foto nota kulakan kamu sekarang!')
+        context.user_data['waiting_foto'] = 'kulakan'
+        return ConversationHandler.END
+    elif pilihan == 'excel':
+        await query.edit_message_text(
+            '📊 *Upload Excel Kulakan*\n\n'
+            'Format kolom Excel:\n'
+            '`Nama_Snack | Tempat_Beli | Harga_Beli | Jumlah`\n\n'
+            'Kirim file Excel sekarang!',
+            parse_mode='Markdown'
+        )
+        context.user_data['waiting_excel'] = 'kulakan'
+        return ConversationHandler.END
 
 async def kulakan_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['kulakan_nama'] = update.message.text.strip()
@@ -215,7 +116,7 @@ async def kulakan_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def kulakan_tempat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['kulakan_tempat'] = update.message.text.strip()
-    await update.message.reply_text('Harga beli per pcs/bungkus? (angka saja, contoh: 2000)')
+    await update.message.reply_text('Harga beli per pcs? (angka saja, contoh: 2000)')
     return KULAKAN_HARGA
 
 async def kulakan_harga(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -246,7 +147,7 @@ async def kulakan_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'🏪 Tempat: {tempat}\n'
             f'💵 Harga beli: Rp{harga:,}\n'
             f'📦 Jumlah: {jumlah}\n'
-            f'💰 Total bayar: Rp{total:,}',
+            f'💰 Total: Rp{total:,}',
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -257,8 +158,36 @@ async def kulakan_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # STOK KE KANTIN
 # ================================
 async def kantin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('🏪 *Stok Masuk Kantin*\n\nNama snack yang dibawa ke kantin?', parse_mode='Markdown')
-    return KANTIN_NAMA
+    context.user_data['menu'] = 'kantin'
+    await update.message.reply_text(
+        '🏪 *Stok ke Kantin*\n\nPilih cara input:',
+        reply_markup=keyboard_cara_input(),
+        parse_mode='Markdown'
+    )
+    return KANTIN_PILIH
+
+async def kantin_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pilihan = query.data
+
+    if pilihan == 'manual':
+        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang dibawa ke kantin?')
+        return KANTIN_NAMA
+    elif pilihan == 'foto':
+        await query.edit_message_text('📸 Kirim foto daftar stok kantin kamu sekarang!')
+        context.user_data['waiting_foto'] = 'kantin'
+        return ConversationHandler.END
+    elif pilihan == 'excel':
+        await query.edit_message_text(
+            '📊 *Upload Excel Kantin*\n\n'
+            'Format kolom Excel:\n'
+            '`Nama_Snack | Jumlah`\n\n'
+            'Kirim file Excel sekarang!',
+            parse_mode='Markdown'
+        )
+        context.user_data['waiting_excel'] = 'kantin'
+        return ConversationHandler.END
 
 async def kantin_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['kantin_nama'] = update.message.text.strip()
@@ -289,8 +218,36 @@ async def kantin_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # CATAT PENJUALAN
 # ================================
 async def jual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('💰 *Catat Penjualan*\n\nNama snack yang terjual?', parse_mode='Markdown')
-    return JUAL_NAMA
+    context.user_data['menu'] = 'jual'
+    await update.message.reply_text(
+        '💰 *Catat Penjualan*\n\nPilih cara input:',
+        reply_markup=keyboard_cara_input(),
+        parse_mode='Markdown'
+    )
+    return JUAL_PILIH
+
+async def jual_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pilihan = query.data
+
+    if pilihan == 'manual':
+        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang terjual?')
+        return JUAL_NAMA
+    elif pilihan == 'foto':
+        await query.edit_message_text('📸 Kirim foto daftar penjualan kamu sekarang!')
+        context.user_data['waiting_foto'] = 'jual'
+        return ConversationHandler.END
+    elif pilihan == 'excel':
+        await query.edit_message_text(
+            '📊 *Upload Excel Penjualan*\n\n'
+            'Format kolom Excel:\n'
+            '`Nama_Snack | Jumlah_Terjual | Harga_Jual`\n\n'
+            'Kirim file Excel sekarang!',
+            parse_mode='Markdown'
+        )
+        context.user_data['waiting_excel'] = 'jual'
+        return ConversationHandler.END
 
 async def jual_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['jual_nama'] = update.message.text.strip()
@@ -331,6 +288,212 @@ async def jual_harga(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ================================
+# PROSES FOTO (semua menu)
+# ================================
+async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    menu = context.user_data.get('waiting_foto')
+    if not menu:
+        return
+
+    await update.message.reply_text('⏳ Sedang membaca foto, tunggu sebentar...')
+
+    try:
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        file_bytes = await file.download_as_bytearray()
+        image_base64 = base64.b64encode(file_bytes).decode('utf-8')
+
+        if menu == 'kulakan':
+            prompt = """Baca nota belanja ini. Ekstrak semua item dalam format JSON:
+{
+    "tempat_beli": "nama toko atau tidak diketahui",
+    "items": [{"nama": "nama produk", "jumlah": angka, "harga_satuan": angka, "total": angka}],
+    "total_semua": angka
+}
+Kembalikan JSON saja tanpa penjelasan."""
+
+        elif menu == 'kantin':
+            prompt = """Baca daftar stok ini. Ekstrak semua item dalam format JSON:
+{
+    "items": [{"nama": "nama produk", "jumlah": angka}]
+}
+Kembalikan JSON saja tanpa penjelasan."""
+
+        elif menu == 'jual':
+            prompt = """Baca daftar penjualan ini. Ekstrak semua item dalam format JSON:
+{
+    "items": [{"nama": "nama produk", "jumlah": angka, "harga_jual": angka, "total": angka}]
+}
+Kembalikan JSON saja tanpa penjelasan."""
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=[
+                types.Part.from_text(text=prompt),
+                types.Part.from_bytes(
+                    data=base64.b64decode(image_base64),
+                    mime_type='image/jpeg'
+                )
+            ]
+        )
+
+        hasil_text = response.text.strip()
+        if '```json' in hasil_text:
+            hasil_text = hasil_text.split('```json')[1].split('```')[0].strip()
+        elif '```' in hasil_text:
+            hasil_text = hasil_text.split('```')[1].split('```')[0].strip()
+
+        hasil = json.loads(hasil_text)
+        sheet = get_sheet()
+        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
+        pesan = '✅ *Foto berhasil dibaca!*\n\n'
+
+        if menu == 'kulakan':
+            ws = sheet.worksheet('Kulakan')
+            tempat = hasil.get('tempat_beli', 'Tidak diketahui')
+            pesan += f'🏪 Tempat: {tempat}\n\n📦 Item:\n'
+            for item in hasil.get('items', []):
+                nama = item.get('nama', '-')
+                jumlah = item.get('jumlah', 0)
+                harga = item.get('harga_satuan', 0)
+                total = item.get('total', harga * jumlah)
+                ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
+                pesan += f'• {nama} x{jumlah} @ Rp{harga:,} = Rp{total:,}\n'
+            pesan += f'\n💰 Total: Rp{hasil.get("total_semua", 0):,}'
+
+        elif menu == 'kantin':
+            ws = sheet.worksheet('Kantin')
+            pesan += '📦 Item masuk kantin:\n'
+            for item in hasil.get('items', []):
+                nama = item.get('nama', '-')
+                jumlah = item.get('jumlah', 0)
+                ws.append_row([tanggal, nama, jumlah])
+                pesan += f'• {nama} x{jumlah}\n'
+
+        elif menu == 'jual':
+            ws = sheet.worksheet('Penjualan')
+            pesan += '💰 Item terjual:\n'
+            total_semua = 0
+            for item in hasil.get('items', []):
+                nama = item.get('nama', '-')
+                jumlah = item.get('jumlah', 0)
+                harga = item.get('harga_jual', 0)
+                total = item.get('total', harga * jumlah)
+                total_semua += total
+                ws.append_row([tanggal, nama, jumlah, harga, total])
+                pesan += f'• {nama} x{jumlah} = Rp{total:,}\n'
+            pesan += f'\n💰 Total: Rp{total_semua:,}'
+
+        await update.message.reply_text(pesan, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f'Error proses foto: {e}')
+        await update.message.reply_text('❌ Gagal membaca foto. Coba lagi dengan foto yang lebih jelas!')
+
+    context.user_data['waiting_foto'] = None
+
+# ================================
+# PROSES EXCEL (semua menu)
+# ================================
+async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    menu = context.user_data.get('waiting_excel')
+    if not menu:
+        return
+
+    await update.message.reply_text('⏳ Sedang membaca file Excel...')
+
+    try:
+        file = await context.bot.get_file(update.document.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+        ws_excel = wb.active
+        rows = list(ws_excel.iter_rows(min_row=2, values_only=True))
+
+        sheet = get_sheet()
+        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
+        pesan = '✅ *Excel berhasil dibaca!*\n\n'
+        count = 0
+
+        if menu == 'kulakan':
+            ws = sheet.worksheet('Kulakan')
+            pesan += '📦 Item kulakan:\n'
+            for row in rows:
+                if not row[0]:
+                    continue
+                nama = str(row[0])
+                tempat = str(row[1]) if row[1] else 'Tidak diketahui'
+                harga = int(row[2]) if row[2] else 0
+                jumlah = int(row[3]) if row[3] else 0
+                total = harga * jumlah
+                ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
+                pesan += f'• {nama} x{jumlah} @ Rp{harga:,} = Rp{total:,}\n'
+                count += 1
+
+        elif menu == 'kantin':
+            ws = sheet.worksheet('Kantin')
+            pesan += '🏪 Item masuk kantin:\n'
+            for row in rows:
+                if not row[0]:
+                    continue
+                nama = str(row[0])
+                jumlah = int(row[1]) if row[1] else 0
+                ws.append_row([tanggal, nama, jumlah])
+                pesan += f'• {nama} x{jumlah}\n'
+                count += 1
+
+        elif menu == 'jual':
+            ws = sheet.worksheet('Penjualan')
+            pesan += '💰 Item terjual:\n'
+            total_semua = 0
+            for row in rows:
+                if not row[0]:
+                    continue
+                nama = str(row[0])
+                jumlah = int(row[1]) if row[1] else 0
+                harga = int(row[2]) if row[2] else 0
+                total = harga * jumlah
+                total_semua += total
+                ws.append_row([tanggal, nama, jumlah, harga, total])
+                pesan += f'• {nama} x{jumlah} = Rp{total:,}\n'
+                count += 1
+            pesan += f'\n💰 Total: Rp{total_semua:,}'
+
+        pesan += f'\n\n✅ {count} item berhasil disimpan!'
+        await update.message.reply_text(pesan, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f'Error proses excel: {e}')
+        await update.message.reply_text('❌ Gagal baca Excel. Pastikan format kolom sudah benar ya!')
+
+    context.user_data['waiting_excel'] = None
+
+# ================================
+# TAMBAH PRODUK
+# ================================
+async def tambah_produk_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('Nama snack baru?')
+    return PRODUK_NAMA
+
+async def produk_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['produk_nama'] = update.message.text.strip()
+    await update.message.reply_text('Satuannya apa? (contoh: pcs, bungkus)')
+    return PRODUK_SATUAN
+
+async def produk_satuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nama = context.user_data['produk_nama']
+    satuan = update.message.text.strip()
+    try:
+        sheet = get_sheet()
+        ws = sheet.worksheet('Produk')
+        data = ws.get_all_values()
+        ws.append_row([len(data), nama, satuan])
+        await update.message.reply_text(f'✅ Produk *{nama}* berhasil ditambahkan!', parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f'❌ Gagal: {e}')
+    return ConversationHandler.END
+
+# ================================
 # LIHAT STOK
 # ================================
 async def lihat_stok(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -343,7 +506,6 @@ async def lihat_stok(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for row in kulakan:
             nama = row['Nama_Snack']
             stok[nama] = stok.get(nama, 0) + int(row['Jumlah'])
-
         for row in penjualan:
             nama = row['Nama_Snack']
             stok[nama] = stok.get(nama, 0) - int(row['Jumlah_Terjual'])
@@ -369,30 +531,28 @@ async def laporan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ['📅 Hari Ini', '📆 Bulan Ini'],
         ['📊 Semua Data', '🔙 Kembali']
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text('Pilih laporan:', reply_markup=reply_markup)
+    await update.message.reply_text(
+        'Pilih laporan:',
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
 
 async def laporan_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         hari_ini = datetime.now(WIB).strftime('%Y-%m-%d')
         sheet = get_sheet()
         penjualan = sheet.worksheet('Penjualan').get_all_records()
-
         total = 0
         pesan = f'📅 *Laporan Hari Ini ({hari_ini})*\n\n'
         ada_data = False
-
         for row in penjualan:
             if str(row['Tanggal']).startswith(hari_ini):
                 ada_data = True
                 pesan += f"🍿 {row['Nama_Snack']} x{row['Jumlah_Terjual']} = Rp{int(row['Total']):,}\n"
                 total += int(row['Total'])
-
         if not ada_data:
             pesan += 'Belum ada penjualan hari ini.'
         else:
             pesan += f'\n💰 *Total: Rp{total:,}*'
-
         await update.message.reply_text(pesan, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f'❌ Gagal: {e}')
@@ -402,24 +562,20 @@ async def laporan_bulan_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bulan_ini = datetime.now(WIB).strftime('%Y-%m')
         sheet = get_sheet()
         penjualan = sheet.worksheet('Penjualan').get_all_records()
-
         total = 0
         rekap = {}
-
         for row in penjualan:
             if str(row['Tanggal']).startswith(bulan_ini):
                 nama = row['Nama_Snack']
                 rekap[nama] = rekap.get(nama, 0) + int(row['Total'])
                 total += int(row['Total'])
-
-        pesan = f'📆 *Laporan Bulan Ini*\n\n'
+        pesan = '📆 *Laporan Bulan Ini*\n\n'
         if not rekap:
             pesan += 'Belum ada data bulan ini.'
         else:
             for nama, tot in rekap.items():
                 pesan += f'🍿 {nama}: Rp{tot:,}\n'
             pesan += f'\n💰 *Total: Rp{total:,}*'
-
         await update.message.reply_text(pesan, parse_mode='Markdown')
     except Exception as e:
         await update.message.reply_text(f'❌ Gagal: {e}')
@@ -429,11 +585,9 @@ async def laporan_semua(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet = get_sheet()
         penjualan = sheet.worksheet('Penjualan').get_all_records()
         kulakan = sheet.worksheet('Kulakan').get_all_records()
-
         total_jual = sum(int(r['Total']) for r in penjualan)
         total_beli = sum(int(r['Total_Bayar']) for r in kulakan)
         keuntungan = total_jual - total_beli
-
         pesan = (
             f'📊 *Laporan Keseluruhan*\n\n'
             f'💰 Total Penjualan: Rp{total_jual:,}\n'
@@ -454,6 +608,7 @@ def main():
     kulakan_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('📦 Catat Kulakan'), kulakan_start)],
         states={
+            KULAKAN_PILIH: [CallbackQueryHandler(kulakan_pilih)],
             KULAKAN_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, kulakan_nama)],
             KULAKAN_TEMPAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, kulakan_tempat)],
             KULAKAN_HARGA: [MessageHandler(filters.TEXT & ~filters.COMMAND, kulakan_harga)],
@@ -465,6 +620,7 @@ def main():
     kantin_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('🏪 Stok ke Kantin'), kantin_start)],
         states={
+            KANTIN_PILIH: [CallbackQueryHandler(kantin_pilih)],
             KANTIN_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, kantin_nama)],
             KANTIN_JUMLAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, kantin_jumlah)],
         },
@@ -474,6 +630,7 @@ def main():
     jual_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('💰 Catat Penjualan'), jual_start)],
         states={
+            JUAL_PILIH: [CallbackQueryHandler(jual_pilih)],
             JUAL_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_nama)],
             JUAL_JUMLAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_jumlah)],
             JUAL_HARGA: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_harga)],
@@ -495,8 +652,8 @@ def main():
     app.add_handler(kantin_handler)
     app.add_handler(jual_handler)
     app.add_handler(produk_handler)
-    app.add_handler(MessageHandler(filters.Regex('📸 Foto Nota'), foto_nota_start))
     app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
+    app.add_handler(MessageHandler(filters.Document.ALL, proses_excel))
     app.add_handler(MessageHandler(filters.Regex('📋 Lihat Stok'), lihat_stok))
     app.add_handler(MessageHandler(filters.Regex('📊 Lihat Laporan'), laporan))
     app.add_handler(MessageHandler(filters.Regex('📅 Hari Ini'), laporan_hari_ini))
