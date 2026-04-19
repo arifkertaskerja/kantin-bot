@@ -10,6 +10,7 @@ from telegram.ext import (
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
+import google.generativeai as genai
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Timezone Indonesia
 WIB = pytz.timezone('Asia/Jakarta')
+
+# Setup Gemini
+genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
+gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Koneksi Google Sheets
 def get_sheet():
@@ -44,7 +49,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ['📦 Catat Kulakan', '🏪 Stok ke Kantin'],
         ['💰 Catat Penjualan', '📊 Lihat Laporan'],
-        ['📋 Lihat Stok', '➕ Tambah Produk']
+        ['📋 Lihat Stok', '➕ Tambah Produk'],
+        ['📸 Foto Nota']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -52,6 +58,110 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+# ================================
+# FOTO NOTA — BACA PAKAI GEMINI
+# ================================
+async def foto_nota_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        '📸 *Kirim Foto Nota*\n\n'
+        'Silakan kirim foto nota belanja kamu.\n'
+        'Bot akan otomatis membaca dan menyimpan datanya!\n\n'
+        '_Pastikan foto jelas dan tidak blur ya_ 😊',
+        parse_mode='Markdown'
+    )
+    context.user_data['waiting_nota'] = True
+
+async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('waiting_nota'):
+        return
+
+    await update.message.reply_text('⏳ Sedang membaca nota, tunggu sebentar...')
+
+    try:
+        # Download foto dari Telegram
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        # Kirim ke Gemini untuk dibaca
+        import PIL.Image
+        import io
+        image = PIL.Image.open(io.BytesIO(file_bytes))
+
+        prompt = """
+        Kamu adalah asisten kasir. Baca nota belanja ini dan ekstrak semua item.
+        
+        Kembalikan dalam format JSON seperti ini:
+        {
+            "tempat_beli": "nama toko",
+            "tanggal": "tanggal pada nota atau kosong",
+            "items": [
+                {
+                    "nama": "nama produk",
+                    "jumlah": angka,
+                    "harga_satuan": angka,
+                    "total": angka
+                }
+            ],
+            "total_semua": angka
+        }
+        
+        Jika tidak bisa baca dengan jelas, isi dengan data yang bisa terbaca saja.
+        Kembalikan JSON saja tanpa penjelasan lain.
+        """
+
+        response = gemini_model.generate_content([prompt, image])
+        hasil_text = response.text.strip()
+
+        # Bersihkan response
+        if '```json' in hasil_text:
+            hasil_text = hasil_text.split('```json')[1].split('```')[0].strip()
+        elif '```' in hasil_text:
+            hasil_text = hasil_text.split('```')[1].split('```')[0].strip()
+
+        hasil = json.loads(hasil_text)
+
+        # Simpan ke Google Sheets
+        sheet = get_sheet()
+        ws = sheet.worksheet('Kulakan')
+        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
+        tempat = hasil.get('tempat_beli', 'Tidak diketahui')
+
+        pesan = f'✅ *Nota berhasil dibaca!*\n\n'
+        pesan += f'🏪 Tempat: {tempat}\n\n'
+        pesan += f'📦 *Item yang tersimpan:*\n'
+
+        for item in hasil.get('items', []):
+            nama = item.get('nama', '-')
+            jumlah = item.get('jumlah', 0)
+            harga = item.get('harga_satuan', 0)
+            total = item.get('total', harga * jumlah)
+
+            ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
+            pesan += f'• {nama} x{jumlah} @ Rp{harga:,} = Rp{total:,}\n'
+
+        total_semua = hasil.get('total_semua', 0)
+        pesan += f'\n💰 *Total: Rp{total_semua:,}*'
+        pesan += f'\n\n_Semua item sudah tersimpan ke sheet Kulakan_ ✅'
+
+        await update.message.reply_text(pesan, parse_mode='Markdown')
+
+    except json.JSONDecodeError:
+        await update.message.reply_text(
+            '⚠️ Bot bisa baca notanya tapi format kurang jelas.\n'
+            'Coba foto lebih dekat dan pastikan tulisan terlihat jelas ya!'
+        )
+    except Exception as e:
+        logger.error(f'Error proses foto: {e}')
+        await update.message.reply_text(
+            '❌ Gagal membaca nota. Pastikan:\n'
+            '• Foto cukup terang\n'
+            '• Tulisan tidak blur\n'
+            '• Coba foto ulang lebih dekat'
+        )
+
+    context.user_data['waiting_nota'] = False
 
 # ================================
 # TAMBAH PRODUK BARU
@@ -72,7 +182,7 @@ async def produk_satuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sheet = get_sheet()
         ws = sheet.worksheet('Produk')
         data = ws.get_all_values()
-        id_baru = len(data)  # ID otomatis
+        id_baru = len(data)
         ws.append_row([id_baru, nama, satuan])
         await update.message.reply_text(f'✅ Produk *{nama}* berhasil ditambahkan!', parse_mode='Markdown')
     except Exception as e:
@@ -329,7 +439,6 @@ def main():
     token = os.environ.get('BOT_TOKEN')
     app = Application.builder().token(token).build()
 
-    # Conversation handlers
     kulakan_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('📦 Catat Kulakan'), kulakan_start)],
         states={
@@ -374,6 +483,8 @@ def main():
     app.add_handler(kantin_handler)
     app.add_handler(jual_handler)
     app.add_handler(produk_handler)
+    app.add_handler(MessageHandler(filters.Regex('📸 Foto Nota'), foto_nota_start))
+    app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
     app.add_handler(MessageHandler(filters.Regex('📋 Lihat Stok'), lihat_stok))
     app.add_handler(MessageHandler(filters.Regex('📊 Lihat Laporan'), laporan))
     app.add_handler(MessageHandler(filters.Regex('📅 Hari Ini'), laporan_hari_ini))
