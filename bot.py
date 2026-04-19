@@ -404,7 +404,7 @@ def get_daftar_produk():
     """Ambil semua nama produk dari sheet Produk"""
     try:
         sheet = get_sheet()
-        ws = sheet.worksheet('Produk')
+        ws = sheet.worksheet('Product')
         data = ws.get_all_records()
         return [str(row['Nama_Snack']).lower().strip() for row in data]
     except:
@@ -414,7 +414,7 @@ def tambah_produk_otomatis(nama, satuan='pcs'):
     """Tambah produk baru ke sheet Produk"""
     try:
         sheet = get_sheet()
-        ws = sheet.worksheet('Produk')
+        ws = sheet.worksheet('Product')
         data = ws.get_all_values()
         id_baru = len(data)
         ws.append_row([id_baru, nama, satuan])
