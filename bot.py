@@ -47,9 +47,9 @@ def get_sheet():
 (KULAKAN_NAMA, KULAKAN_TEMPAT, KULAKAN_HARGA, KULAKAN_JUMLAH,
  KANTIN_NAMA, KANTIN_JUMLAH,
  JUAL_NAMA, JUAL_JUMLAH,
- PRODUK_NAMA, PRODUK_SATUAN, PRODUK_HARGA_JUAL,
+ PRODUK_PILIH, PRODUK_NAMA, PRODUK_SATUAN, PRODUK_HARGA_JUAL,
  KULAKAN_PILIH, KANTIN_PILIH, JUAL_PILIH,
- UBAH_HARGA_NAMA, UBAH_HARGA_BARU) = range(16)
+ UBAH_HARGA_NAMA, UBAH_HARGA_BARU) = range(17)
 
 # ================================
 # MENU UTAMA
@@ -388,6 +388,15 @@ Kembalikan JSON saja tanpa penjelasan."""
 }
 Kembalikan JSON saja tanpa penjelasan."""
 
+        elif menu == 'produk':
+            prompt = """Baca daftar produk/snack ini. Ekstrak semua item dalam format JSON:
+{
+    "items": [{"nama": "nama produk", "satuan": "pcs/bungkus/dll", "harga_jual": angka}]
+}
+Jika satuan tidak ada, isi dengan "pcs".
+Jika harga tidak ada, isi dengan 0.
+Kembalikan JSON saja tanpa penjelasan."""
+
         response = gemini_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
@@ -441,6 +450,14 @@ Kembalikan JSON saja tanpa penjelasan."""
                 total_semua += total
                 pesan += f'• {nama} x{jumlah} = Rp{total:,}\n'
             pesan += f'\n💰 Total: Rp{total_semua:,}'
+
+        elif menu == 'produk':
+            pesan += '🍿 Daftar produk:\n'
+            for item in hasil.get('items', []):
+                nama = norm_nama(item.get('nama', '-'))
+                satuan = item.get('satuan', 'pcs')
+                harga = item.get('harga_jual', 0)
+                pesan += f'• {nama} ({satuan}) — Rp{harga:,}\n'
 
         pesan += '\n\n_Data sudah benar?_'
 
@@ -683,6 +700,33 @@ async def simpan_data_foto(query, context):
             if data_batch:
                 ws.append_rows(data_batch)
 
+        elif menu == 'produk':
+            ws = sheet.worksheet('Product')
+            data_existing = ws.get_all_records()
+            daftar_ada = [norm_nama(r['Nama_Snack']) for r in data_existing]
+            data_batch = []
+            skipped = 0
+            for item in hasil.get('items', []):
+                nama = norm_nama(item.get('nama', '-'))
+                satuan = item.get('satuan', 'pcs')
+                harga_jual = item.get('harga_jual', 0)
+                if nama in daftar_ada:
+                    skipped += 1
+                    continue
+                id_baru = len(data_existing) + len(data_batch) + 1
+                data_batch.append([id_baru, nama, satuan, harga_jual])
+                count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
+            if skipped > 0:
+                await query.edit_message_text(
+                    f'✅ *Produk berhasil disimpan!*\n\n'
+                    f'{count} produk baru ditambahkan.\n'
+                    f'{skipped} produk dilewati (sudah ada). 🎉',
+                    parse_mode='Markdown'
+                )
+                return
+
         await query.edit_message_text(
             f'✅ *Berhasil disimpan!*\n\n'
             f'{count} item tersimpan ke Google Sheets. 🎉',
@@ -816,11 +860,47 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # TAMBAH PRODUK
 # ================================
 async def tambah_produk_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Manual", callback_data='produk_input_manual'),
+            InlineKeyboardButton("📸 Foto", callback_data='produk_input_foto'),
+        ],
+        [InlineKeyboardButton("❌ Batal", callback_data='produk_input_batal')]
+    ])
     await update.message.reply_text(
-        '➕ *Tambah Produk Baru*\n\nNama snack baru?\n\n_Ketik /batal untuk membatalkan_',
+        '➕ *Tambah Produk Baru*\n\nPilih cara input:',
+        reply_markup=keyboard,
         parse_mode='Markdown'
     )
-    return PRODUK_NAMA
+    return PRODUK_PILIH
+
+async def produk_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pilihan = query.data
+
+    if pilihan == 'produk_input_batal':
+        await query.edit_message_text('❌ Dibatalkan.')
+        return ConversationHandler.END
+    elif pilihan == 'produk_input_manual':
+        await query.edit_message_text(
+            '✏️ *Input Manual*\n\nNama snack baru?\n\n_Ketik /batal untuk membatalkan_',
+            parse_mode='Markdown'
+        )
+        return PRODUK_NAMA
+    elif pilihan == 'produk_input_foto':
+        await query.edit_message_text(
+            '📸 *Input Foto*\n\n'
+            'Kirim foto daftar produk kamu!\n\n'
+            'Format yang bisa dibaca:\n'
+            '• Daftar nama + harga\n'
+            '• Struk/nota dengan nama produk\n'
+            '• Tulisan tangan daftar snack\n\n'
+            '_Ketik /batal untuk membatalkan_',
+            parse_mode='Markdown'
+        )
+        context.user_data['waiting_foto'] = 'produk'
+        return ConversationHandler.END
 
 async def produk_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['produk_nama'] = norm_nama(update.message.text.strip())
@@ -1108,6 +1188,7 @@ def main():
     produk_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex('➕ Tambah Produk'), tambah_produk_start)],
         states={
+            PRODUK_PILIH: [CallbackQueryHandler(produk_pilih)],
             PRODUK_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_nama)],
             PRODUK_SATUAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_satuan)],
             PRODUK_HARGA_JUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_harga_jual)],
