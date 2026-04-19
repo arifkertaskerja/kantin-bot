@@ -702,30 +702,50 @@ async def simpan_data_foto(query, context):
 
         elif menu == 'produk':
             ws = sheet.worksheet('Product')
-            data_existing = ws.get_all_records()
-            daftar_ada = [norm_nama(r['Nama_Snack']) for r in data_existing]
+            # Pakai get_all_values supaya aman walau sheet kosong
+            semua_data = ws.get_all_values()
+            # Ambil nama produk yang sudah ada (skip baris header)
+            daftar_ada = [norm_nama(row[1]) for row in semua_data[1:] if len(row) > 1 and row[1]]
             data_batch = []
             skipped = 0
             for item in hasil.get('items', []):
                 nama = norm_nama(item.get('nama', '-'))
                 satuan = item.get('satuan', 'pcs')
-                harga_jual = item.get('harga_jual', 0)
+                harga_jual = int(item.get('harga_jual', 0))
                 if nama in daftar_ada:
                     skipped += 1
                     continue
-                id_baru = len(data_existing) + len(data_batch) + 1
+                id_baru = len(semua_data) + len(data_batch)
                 data_batch.append([id_baru, nama, satuan, harga_jual])
                 count += 1
             if data_batch:
                 ws.append_rows(data_batch)
-            if skipped > 0:
+            # Tampilkan pesan sesuai hasil
+            if count == 0 and skipped > 0:
                 await query.edit_message_text(
-                    f'✅ *Produk berhasil disimpan!*\n\n'
-                    f'{count} produk baru ditambahkan.\n'
-                    f'{skipped} produk dilewati (sudah ada). 🎉',
+                    f'ℹ️ Semua produk sudah ada di daftar, tidak ada yang ditambahkan.',
                     parse_mode='Markdown'
                 )
-                return
+            elif skipped > 0:
+                await query.edit_message_text(
+                    f'✅ *Produk berhasil disimpan!*\n\n'
+                    f'➕ {count} produk baru ditambahkan.\n'
+                    f'⏭ {skipped} produk dilewati (sudah ada). 🎉',
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.edit_message_text(
+                    f'✅ *{count} produk berhasil ditambahkan!* 🎉',
+                    parse_mode='Markdown'
+                )
+            # Cleanup dan return lebih awal
+            context.user_data['waiting_foto'] = None
+            context.user_data['hasil_foto'] = None
+            context.user_data['menu_foto'] = None
+            context.user_data['produk_baru_list'] = None
+            context.user_data['produk_baru_index'] = 0
+            context.user_data['siap_simpan'] = False
+            return
 
         await query.edit_message_text(
             f'✅ *Berhasil disimpan!*\n\n'
