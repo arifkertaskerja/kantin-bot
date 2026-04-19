@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 # Timezone Indonesia
 WIB = pytz.timezone('Asia/Jakarta')
 
+# Normalisasi nama produk — supaya Chiki, chiki, CHIKI dianggap sama
+def norm_nama(nama):
+    return str(nama).strip().title()
+
 # Setup Gemini
 gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
 
@@ -110,7 +114,7 @@ async def kulakan_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def kulakan_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['kulakan_nama'] = update.message.text.strip()
+    context.user_data['kulakan_nama'] = norm_nama(update.message.text.strip())
     await update.message.reply_text('Beli di mana? (contoh: Alfamart, Toko Pak Budi)')
     return KULAKAN_TEMPAT
 
@@ -154,7 +158,7 @@ async def kulakan_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Cek apakah produk sudah ada
         daftar = get_daftar_produk()
-        if nama.lower().strip() not in daftar:
+        if norm_nama(nama) not in daftar:
             context.user_data['produk_baru_manual'] = nama
             keyboard = InlineKeyboardMarkup([
                 [
@@ -210,7 +214,7 @@ async def kantin_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def kantin_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['kantin_nama'] = update.message.text.strip()
+    context.user_data['kantin_nama'] = norm_nama(update.message.text.strip())
     await update.message.reply_text('Berapa jumlah yang dibawa ke kantin?')
     return KANTIN_JUMLAH
 
@@ -270,7 +274,7 @@ async def jual_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
 async def jual_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['jual_nama'] = update.message.text.strip()
+    context.user_data['jual_nama'] = norm_nama(update.message.text.strip())
     await update.message.reply_text('Berapa yang terjual?')
     return JUAL_JUMLAH
 
@@ -376,7 +380,7 @@ Kembalikan JSON saja tanpa penjelasan."""
             tempat = hasil.get('tempat_beli', 'Tidak diketahui')
             pesan += f'🏪 Tempat: {tempat}\n\n📦 Item:\n'
             for item in hasil.get('items', []):
-                nama = item.get('nama', '-')
+                nama = norm_nama(item.get('nama', '-'))
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_satuan', 0)
                 total = item.get('total', harga * jumlah)
@@ -392,7 +396,7 @@ Kembalikan JSON saja tanpa penjelasan."""
             pesan += '💰 Item terjual:\n'
             total_semua = 0
             for item in hasil.get('items', []):
-                nama = item.get('nama', '-')
+                nama = norm_nama(item.get('nama', '-'))
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_jual', 0)
                 total = item.get('total', harga * jumlah)
@@ -426,7 +430,7 @@ def get_daftar_produk():
         sheet = get_sheet()
         ws = sheet.worksheet('Product')
         data = ws.get_all_records()
-        return [str(row['Nama_Snack']).lower().strip() for row in data]
+        return [norm_nama(row['Nama_Snack']) for row in data]
     except:
         return []
 
@@ -447,7 +451,7 @@ def cek_produk_baru(items, field_nama='nama'):
     daftar = get_daftar_produk()
     produk_baru = []
     for item in items:
-        nama = str(item.get(field_nama, '')).lower().strip()
+        nama = norm_nama(item.get(field_nama, ''))
         if nama and nama not in daftar:
             produk_baru.append(item.get(field_nama))
     return produk_baru
@@ -607,7 +611,7 @@ async def simpan_data_foto(query, context):
             ws = sheet.worksheet('Kulakan')
             tempat = hasil.get('tempat_beli', 'Tidak diketahui')
             for item in hasil.get('items', []):
-                nama = item.get('nama', '-')
+                nama = norm_nama(item.get('nama', '-'))
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_satuan', 0)
                 total = item.get('total', harga * jumlah)
@@ -623,7 +627,7 @@ async def simpan_data_foto(query, context):
         elif menu == 'jual':
             ws = sheet.worksheet('Penjualan')
             for item in hasil.get('items', []):
-                nama = item.get('nama', '-')
+                nama = norm_nama(item.get('nama', '-'))
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_jual', 0)
                 total = item.get('total', harga * jumlah)
@@ -675,7 +679,7 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for row in rows:
                 if not row[0]:
                     continue
-                nama = str(row[0])
+                nama = norm_nama(str(row[0]))
                 tempat = str(row[1]) if row[1] else 'Tidak diketahui'
                 harga = int(row[2]) if row[2] else 0
                 jumlah = int(row[3]) if row[3] else 0
@@ -690,7 +694,7 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for row in rows:
                 if not row[0]:
                     continue
-                nama = str(row[0])
+                nama = norm_nama(str(row[0]))
                 jumlah = int(row[1]) if row[1] else 0
                 ws.append_row([tanggal, nama, jumlah])
                 pesan += f'• {nama} x{jumlah}\n'
@@ -719,7 +723,7 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for row in rows:
             if not row[0]:
                 continue
-            nama = str(row[0]).lower().strip()
+            nama = norm_nama(str(row[0]))
             if nama and nama not in daftar:
                 produk_baru_excel.append(str(row[0]))
 
@@ -758,7 +762,7 @@ async def tambah_produk_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     return PRODUK_NAMA
 
 async def produk_nama(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['produk_nama'] = update.message.text.strip()
+    context.user_data['produk_nama'] = norm_nama(update.message.text.strip())
     await update.message.reply_text('Satuannya apa? (contoh: pcs, bungkus)')
     return PRODUK_SATUAN
 
@@ -788,19 +792,19 @@ async def lihat_stok(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Hitung stok APAR = total kulakan - total pindah ke kantin
         stok_apar = {}
         for row in kulakan:
-            nama = row['Nama_Snack']
+            nama = norm_nama(row['Nama_Snack'])
             stok_apar[nama] = stok_apar.get(nama, 0) + int(row['Jumlah'])
         for row in kantin_masuk:
-            nama = row['Nama_Snack']
+            nama = norm_nama(row['Nama_Snack'])
             stok_apar[nama] = stok_apar.get(nama, 0) - int(row['Jumlah_Masuk'])
 
         # Hitung stok KANTIN = total masuk kantin - total terjual
         stok_kantin = {}
         for row in kantin_masuk:
-            nama = row['Nama_Snack']
+            nama = norm_nama(row['Nama_Snack'])
             stok_kantin[nama] = stok_kantin.get(nama, 0) + int(row['Jumlah_Masuk'])
         for row in penjualan:
-            nama = row['Nama_Snack']
+            nama = norm_nama(row['Nama_Snack'])
             stok_kantin[nama] = stok_kantin.get(nama, 0) - int(row['Jumlah_Terjual'])
 
         # Gabungkan semua nama produk
