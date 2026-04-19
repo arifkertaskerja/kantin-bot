@@ -327,7 +327,7 @@ Kembalikan JSON saja tanpa penjelasan."""
 Kembalikan JSON saja tanpa penjelasan."""
 
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-2.5-flash',
             contents=[
                 types.Part.from_text(text=prompt),
                 types.Part.from_bytes(
