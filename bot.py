@@ -75,8 +75,28 @@ def keyboard_cara_input():
             InlineKeyboardButton("✏️ Manual", callback_data='manual'),
             InlineKeyboardButton("📸 Foto Nota", callback_data='foto'),
             InlineKeyboardButton("📊 Excel", callback_data='excel'),
+        ],
+        [
+            InlineKeyboardButton("❌ Batal", callback_data='batal'),
         ]
     ])
+
+# ================================
+# BATAL
+# ================================
+async def batal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    keyboard = [
+        ['📦 Catat Kulakan', '🏪 Stok ke Kantin'],
+        ['💰 Catat Penjualan', '📊 Lihat Laporan'],
+        ['📋 Lihat Stok', '➕ Tambah Produk'],
+    ]
+    await update.message.reply_text(
+        '❌ *Dibatalkan.*\n\nKembali ke menu utama:',
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
 
 # ================================
 # KULAKAN
@@ -95,11 +115,14 @@ async def kulakan_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     pilihan = query.data
 
-    if pilihan == 'manual':
-        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang dibeli?')
+    if pilihan == 'batal':
+        await query.edit_message_text('❌ Dibatalkan. Kembali ke menu utama.')
+        return ConversationHandler.END
+    elif pilihan == 'manual':
+        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang dibeli?\n\n_Ketik /batal untuk membatalkan_', parse_mode='Markdown')
         return KULAKAN_NAMA
     elif pilihan == 'foto':
-        await query.edit_message_text('📸 Kirim foto nota kulakan kamu sekarang!')
+        await query.edit_message_text('📸 Kirim foto nota kulakan kamu sekarang!\n\n_Ketik /batal untuk membatalkan_', parse_mode='Markdown')
         context.user_data['waiting_foto'] = 'kulakan'
         return ConversationHandler.END
     elif pilihan == 'excel':
@@ -107,7 +130,7 @@ async def kulakan_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '📊 *Upload Excel Kulakan*\n\n'
             'Format kolom Excel:\n'
             '`Nama_Snack | Tempat_Beli | Harga_Beli | Jumlah`\n\n'
-            'Kirim file Excel sekarang!',
+            'Kirim file Excel sekarang!\n\n_Ketik /batal untuk membatalkan_',
             parse_mode='Markdown'
         )
         context.user_data['waiting_excel'] = 'kulakan'
@@ -195,11 +218,14 @@ async def kantin_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     pilihan = query.data
 
-    if pilihan == 'manual':
-        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang dibawa ke kantin?')
+    if pilihan == 'batal':
+        await query.edit_message_text('❌ Dibatalkan. Kembali ke menu utama.')
+        return ConversationHandler.END
+    elif pilihan == 'manual':
+        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang dibawa ke kantin?\n\n_Ketik /batal untuk membatalkan_', parse_mode='Markdown')
         return KANTIN_NAMA
     elif pilihan == 'foto':
-        await query.edit_message_text('📸 Kirim foto daftar stok kantin kamu sekarang!')
+        await query.edit_message_text('📸 Kirim foto daftar stok kantin kamu sekarang!\n\n_Ketik /batal untuk membatalkan_', parse_mode='Markdown')
         context.user_data['waiting_foto'] = 'kantin'
         return ConversationHandler.END
     elif pilihan == 'excel':
@@ -207,7 +233,7 @@ async def kantin_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '📊 *Upload Excel Kantin*\n\n'
             'Format kolom Excel:\n'
             '`Nama_Snack | Jumlah`\n\n'
-            'Kirim file Excel sekarang!',
+            'Kirim file Excel sekarang!\n\n_Ketik /batal untuk membatalkan_',
             parse_mode='Markdown'
         )
         context.user_data['waiting_excel'] = 'kantin'
@@ -255,11 +281,14 @@ async def jual_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     pilihan = query.data
 
-    if pilihan == 'manual':
-        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang terjual?')
+    if pilihan == 'batal':
+        await query.edit_message_text('❌ Dibatalkan. Kembali ke menu utama.')
+        return ConversationHandler.END
+    elif pilihan == 'manual':
+        await query.edit_message_text('✏️ Input Manual\n\nNama snack yang terjual?\n\n_Ketik /batal untuk membatalkan_', parse_mode='Markdown')
         return JUAL_NAMA
     elif pilihan == 'foto':
-        await query.edit_message_text('📸 Kirim foto daftar penjualan kamu sekarang!')
+        await query.edit_message_text('📸 Kirim foto daftar penjualan kamu sekarang!\n\n_Ketik /batal untuk membatalkan_', parse_mode='Markdown')
         context.user_data['waiting_foto'] = 'jual'
         return ConversationHandler.END
     elif pilihan == 'excel':
@@ -267,7 +296,7 @@ async def jual_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '📊 *Upload Excel Penjualan*\n\n'
             'Format kolom Excel:\n'
             '`Nama_Snack | Jumlah_Terjual | Harga_Jual`\n\n'
-            'Kirim file Excel sekarang!',
+            'Kirim file Excel sekarang!\n\n_Ketik /batal untuk membatalkan_',
             parse_mode='Markdown'
         )
         context.user_data['waiting_excel'] = 'jual'
@@ -947,7 +976,7 @@ def main():
             KULAKAN_HARGA: [MessageHandler(filters.TEXT & ~filters.COMMAND, kulakan_harga)],
             KULAKAN_JUMLAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, kulakan_jumlah)],
         },
-        fallbacks=[CommandHandler('start', start)]
+        fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
 
     kantin_handler = ConversationHandler(
@@ -957,7 +986,7 @@ def main():
             KANTIN_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, kantin_nama)],
             KANTIN_JUMLAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, kantin_jumlah)],
         },
-        fallbacks=[CommandHandler('start', start)]
+        fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
 
     jual_handler = ConversationHandler(
@@ -968,7 +997,7 @@ def main():
             JUAL_JUMLAH: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_jumlah)],
             JUAL_HARGA: [MessageHandler(filters.TEXT & ~filters.COMMAND, jual_harga)],
         },
-        fallbacks=[CommandHandler('start', start)]
+        fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
 
     produk_handler = ConversationHandler(
@@ -977,10 +1006,11 @@ def main():
             PRODUK_NAMA: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_nama)],
             PRODUK_SATUAN: [MessageHandler(filters.TEXT & ~filters.COMMAND, produk_satuan)],
         },
-        fallbacks=[CommandHandler('start', start)]
+        fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
 
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('batal', batal))
     app.add_handler(kulakan_handler)
     app.add_handler(kantin_handler)
     app.add_handler(jual_handler)
