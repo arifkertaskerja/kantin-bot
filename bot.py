@@ -767,7 +767,7 @@ async def produk_satuan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     satuan = update.message.text.strip()
     try:
         sheet = get_sheet()
-        ws = sheet.worksheet('Produk')
+        ws = sheet.worksheet('Product')
         data = ws.get_all_values()
         ws.append_row([len(data), nama, satuan])
         await update.message.reply_text(f'✅ Produk *{nama}* berhasil ditambahkan!', parse_mode='Markdown')
