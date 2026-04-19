@@ -610,29 +610,40 @@ async def simpan_data_foto(query, context):
         if menu == 'kulakan':
             ws = sheet.worksheet('Kulakan')
             tempat = hasil.get('tempat_beli', 'Tidak diketahui')
+            data_batch = []
             for item in hasil.get('items', []):
                 nama = norm_nama(item.get('nama', '-'))
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_satuan', 0)
                 total = item.get('total', harga * jumlah)
-                ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
+                data_batch.append([tanggal, nama, tempat, harga, jumlah, total])
                 count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
 
         elif menu == 'kantin':
             ws = sheet.worksheet('Kantin')
+            data_batch = []
             for item in hasil.get('items', []):
-                ws.append_row([tanggal, item.get('nama'), item.get('jumlah')])
+                nama = norm_nama(item.get('nama', '-'))
+                jumlah = item.get('jumlah', 0)
+                data_batch.append([tanggal, nama, jumlah])
                 count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
 
         elif menu == 'jual':
             ws = sheet.worksheet('Penjualan')
+            data_batch = []
             for item in hasil.get('items', []):
                 nama = norm_nama(item.get('nama', '-'))
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_jual', 0)
                 total = item.get('total', harga * jumlah)
-                ws.append_row([tanggal, nama, jumlah, harga, total])
+                data_batch.append([tanggal, nama, jumlah, harga, total])
                 count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
 
         await query.edit_message_text(
             f'✅ *Berhasil disimpan!*\n\n'
@@ -676,6 +687,7 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if menu == 'kulakan':
             ws = sheet.worksheet('Kulakan')
             pesan += '📦 Item kulakan:\n'
+            data_batch = []
             for row in rows:
                 if not row[0]:
                     continue
@@ -684,37 +696,45 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 harga = int(row[2]) if row[2] else 0
                 jumlah = int(row[3]) if row[3] else 0
                 total = harga * jumlah
-                ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
+                data_batch.append([tanggal, nama, tempat, harga, jumlah, total])
                 pesan += f'• {nama} x{jumlah} @ Rp{harga:,} = Rp{total:,}\n'
                 count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
 
         elif menu == 'kantin':
             ws = sheet.worksheet('Kantin')
             pesan += '🏪 Item masuk kantin:\n'
+            data_batch = []
             for row in rows:
                 if not row[0]:
                     continue
                 nama = norm_nama(str(row[0]))
                 jumlah = int(row[1]) if row[1] else 0
-                ws.append_row([tanggal, nama, jumlah])
+                data_batch.append([tanggal, nama, jumlah])
                 pesan += f'• {nama} x{jumlah}\n'
                 count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
 
         elif menu == 'jual':
             ws = sheet.worksheet('Penjualan')
             pesan += '💰 Item terjual:\n'
             total_semua = 0
+            data_batch = []
             for row in rows:
                 if not row[0]:
                     continue
-                nama = str(row[0])
+                nama = norm_nama(str(row[0]))
                 jumlah = int(row[1]) if row[1] else 0
                 harga = int(row[2]) if row[2] else 0
                 total = harga * jumlah
                 total_semua += total
-                ws.append_row([tanggal, nama, jumlah, harga, total])
+                data_batch.append([tanggal, nama, jumlah, harga, total])
                 pesan += f'• {nama} x{jumlah} = Rp{total:,}\n'
                 count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
             pesan += f'\n💰 Total: Rp{total_semua:,}'
              
         # Cek produk baru dari excel
