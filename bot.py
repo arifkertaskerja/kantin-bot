@@ -327,7 +327,7 @@ Kembalikan JSON saja tanpa penjelasan."""
 Kembalikan JSON saja tanpa penjelasan."""
 
         response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-2.0-flash',
             contents=[
                 types.Part.from_text(text=prompt),
                 types.Part.from_bytes(
@@ -344,12 +344,15 @@ Kembalikan JSON saja tanpa penjelasan."""
             hasil_text = hasil_text.split('```')[1].split('```')[0].strip()
 
         hasil = json.loads(hasil_text)
-        sheet = get_sheet()
-        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
-        pesan = '✅ *Foto berhasil dibaca!*\n\n'
+
+        # Simpan hasil sementara untuk konfirmasi
+        context.user_data['hasil_foto'] = hasil
+        context.user_data['menu_foto'] = menu
+
+        # Tampilkan hasil dulu, belum disimpan
+        pesan = '📋 *Hasil Baca Foto:*\n\n'
 
         if menu == 'kulakan':
-            ws = sheet.worksheet('Kulakan')
             tempat = hasil.get('tempat_beli', 'Tidak diketahui')
             pesan += f'🏪 Tempat: {tempat}\n\n📦 Item:\n'
             for item in hasil.get('items', []):
@@ -357,21 +360,15 @@ Kembalikan JSON saja tanpa penjelasan."""
                 jumlah = item.get('jumlah', 0)
                 harga = item.get('harga_satuan', 0)
                 total = item.get('total', harga * jumlah)
-                ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
                 pesan += f'• {nama} x{jumlah} @ Rp{harga:,} = Rp{total:,}\n'
             pesan += f'\n💰 Total: Rp{hasil.get("total_semua", 0):,}'
 
         elif menu == 'kantin':
-            ws = sheet.worksheet('Kantin')
             pesan += '📦 Item masuk kantin:\n'
             for item in hasil.get('items', []):
-                nama = item.get('nama', '-')
-                jumlah = item.get('jumlah', 0)
-                ws.append_row([tanggal, nama, jumlah])
-                pesan += f'• {nama} x{jumlah}\n'
+                pesan += f'• {item.get("nama")} x{item.get("jumlah")}\n'
 
         elif menu == 'jual':
-            ws = sheet.worksheet('Penjualan')
             pesan += '💰 Item terjual:\n'
             total_semua = 0
             for item in hasil.get('items', []):
@@ -380,17 +377,82 @@ Kembalikan JSON saja tanpa penjelasan."""
                 harga = item.get('harga_jual', 0)
                 total = item.get('total', harga * jumlah)
                 total_semua += total
-                ws.append_row([tanggal, nama, jumlah, harga, total])
                 pesan += f'• {nama} x{jumlah} = Rp{total:,}\n'
             pesan += f'\n💰 Total: Rp{total_semua:,}'
 
-        await update.message.reply_text(pesan, parse_mode='Markdown')
+        pesan += '\n\n_Data sudah benar?_'
+
+        # Tombol konfirmasi
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Ya, Simpan!", callback_data='konfirmasi_simpan'),
+                InlineKeyboardButton("❌ Batal", callback_data='konfirmasi_batal'),
+            ]
+        ])
+
+        await update.message.reply_text(pesan, parse_mode='Markdown', reply_markup=keyboard)
 
     except Exception as e:
         logger.error(f'Error proses foto: {e}')
         await update.message.reply_text('❌ Gagal membaca foto. Coba lagi dengan foto yang lebih jelas!')
+        context.user_data['waiting_foto'] = None
+
+
+async def konfirmasi_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == 'konfirmasi_batal':
+        await query.edit_message_text('❌ Data dibatalkan, tidak ada yang tersimpan.')
+        context.user_data['waiting_foto'] = None
+        return
+
+    # Simpan ke Google Sheets
+    try:
+        hasil = context.user_data.get('hasil_foto')
+        menu = context.user_data.get('menu_foto')
+        sheet = get_sheet()
+        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
+        count = 0
+
+        if menu == 'kulakan':
+            ws = sheet.worksheet('Kulakan')
+            tempat = hasil.get('tempat_beli', 'Tidak diketahui')
+            for item in hasil.get('items', []):
+                nama = item.get('nama', '-')
+                jumlah = item.get('jumlah', 0)
+                harga = item.get('harga_satuan', 0)
+                total = item.get('total', harga * jumlah)
+                ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
+                count += 1
+
+        elif menu == 'kantin':
+            ws = sheet.worksheet('Kantin')
+            for item in hasil.get('items', []):
+                ws.append_row([tanggal, item.get('nama'), item.get('jumlah')])
+                count += 1
+
+        elif menu == 'jual':
+            ws = sheet.worksheet('Penjualan')
+            for item in hasil.get('items', []):
+                nama = item.get('nama', '-')
+                jumlah = item.get('jumlah', 0)
+                harga = item.get('harga_jual', 0)
+                total = item.get('total', harga * jumlah)
+                ws.append_row([tanggal, nama, jumlah, harga, total])
+                count += 1
+
+        await query.edit_message_text(
+            f'✅ *Berhasil disimpan!*\n\n{count} item tersimpan ke Google Sheets.',
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        await query.edit_message_text(f'❌ Gagal simpan: {e}')
 
     context.user_data['waiting_foto'] = None
+    context.user_data['hasil_foto'] = None
+    context.user_data['menu_foto'] = None
 
 # ================================
 # PROSES EXCEL (semua menu)
@@ -653,6 +715,7 @@ def main():
     app.add_handler(jual_handler)
     app.add_handler(produk_handler)
     app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
+    app.add_handler(CallbackQueryHandler(konfirmasi_foto, pattern='^konfirmasi_'))
     app.add_handler(MessageHandler(filters.Document.ALL, proses_excel))
     app.add_handler(MessageHandler(filters.Regex('📋 Lihat Stok'), lihat_stok))
     app.add_handler(MessageHandler(filters.Regex('📊 Lihat Laporan'), laporan))
