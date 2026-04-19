@@ -110,7 +110,7 @@ async def proses_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash',
+            model='gemini-1.5-flash',
             contents=[
                 types.Part.from_text(text=prompt),
                 types.Part.from_bytes(
