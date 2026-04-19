@@ -137,6 +137,7 @@ async def kulakan_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = harga * jumlah
         tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
 
+        # Simpan dulu ke sheet Kulakan
         sheet = get_sheet()
         ws = sheet.worksheet('Kulakan')
         ws.append_row([tanggal, nama, tempat, harga, jumlah, total])
@@ -150,6 +151,25 @@ async def kulakan_jumlah(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'💰 Total: Rp{total:,}',
             parse_mode='Markdown'
         )
+
+        # Cek apakah produk sudah ada
+        daftar = get_daftar_produk()
+        if nama.lower().strip() not in daftar:
+            context.user_data['produk_baru_manual'] = nama
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ya, Tambahkan", callback_data='manual_produk_ya'),
+                    InlineKeyboardButton("❌ Lewati", callback_data='manual_produk_skip'),
+                ]
+            ])
+            await update.message.reply_text(
+                f'🆕 *Produk baru ditemukan!*\n\n'
+                f'*"{nama}"* belum ada di daftar produk.\n\n'
+                f'Tambahkan ke daftar produk?',
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+
     except Exception as e:
         await update.message.reply_text(f'❌ Gagal: {e}')
     return ConversationHandler.END
@@ -432,6 +452,69 @@ def cek_produk_baru(items, field_nama='nama'):
             produk_baru.append(item.get(field_nama))
     return produk_baru
 
+async def konfirmasi_produk_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    nama = context.user_data.get('produk_baru_manual')
+
+    if query.data == 'manual_produk_ya':
+        berhasil = tambah_produk_otomatis(nama)
+        if berhasil:
+            await query.edit_message_text(
+                f'✅ *{nama}* berhasil ditambahkan ke daftar produk!',
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(f'❌ Gagal tambah produk.')
+    else:
+        await query.edit_message_text(f'⏭ *{nama}* tidak ditambahkan ke daftar produk.', parse_mode='Markdown')
+
+    context.user_data['produk_baru_manual'] = None
+
+
+async def konfirmasi_produk_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    produk_list = context.user_data.get('produk_baru_excel_list', [])
+    index = context.user_data.get('produk_baru_excel_index', 0)
+    nama = produk_list[index]
+
+    if query.data == 'excel_produk_ya':
+        tambah_produk_otomatis(nama)
+        await query.answer(f'✅ {nama} ditambahkan!')
+    else:
+        await query.answer(f'⏭ {nama} dilewati.')
+
+    # Cek apakah masih ada produk baru
+    index += 1
+    context.user_data['produk_baru_excel_index'] = index
+
+    if index < len(produk_list):
+        nama_berikut = produk_list[index]
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Ya, Tambahkan", callback_data='excel_produk_ya'),
+                InlineKeyboardButton("❌ Lewati", callback_data='excel_produk_skip'),
+            ]
+        ])
+        await query.edit_message_text(
+            f'🆕 *Produk baru ditemukan!*\n\n'
+            f'*"{nama_berikut}"* belum ada di daftar produk.\n\n'
+            f'Tambahkan ke daftar produk?',
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+    else:
+        await query.edit_message_text(
+            '✅ Semua produk baru sudah diproses!',
+            parse_mode='Markdown'
+        )
+        context.user_data['produk_baru_excel_list'] = None
+        context.user_data['produk_baru_excel_index'] = 0
+
+
 async def konfirmasi_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -629,7 +712,35 @@ async def proses_excel(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pesan += f'• {nama} x{jumlah} = Rp{total:,}\n'
                 count += 1
             pesan += f'\n💰 Total: Rp{total_semua:,}'
+             
+        # Cek produk baru dari excel
+        daftar = get_daftar_produk()
+        produk_baru_excel = []
+        for row in rows:
+            if not row[0]:
+                continue
+            nama = str(row[0]).lower().strip()
+            if nama and nama not in daftar:
+                produk_baru_excel.append(str(row[0]))
 
+        if produk_baru_excel:
+            context.user_data['produk_baru_excel_list'] = produk_baru_excel
+            context.user_data['produk_baru_excel_index'] = 0
+
+            nama_pertama = produk_baru_excel[0]
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ya, Tambahkan", callback_data='excel_produk_ya'),
+                    InlineKeyboardButton("❌ Lewati", callback_data='excel_produk_skip'),
+                ]
+            ])
+            await update.message.reply_text(
+                f'🆕 *Produk baru ditemukan!*\n\n'
+                f'*"{nama_pertama}"* belum ada di daftar produk.\n\n'
+                f'Tambahkan ke daftar produk?',
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
         pesan += f'\n\n✅ {count} item berhasil disimpan!'
         await update.message.reply_text(pesan, parse_mode='Markdown')
 
@@ -825,6 +936,8 @@ def main():
     app.add_handler(produk_handler)
     app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
     app.add_handler(CallbackQueryHandler(konfirmasi_foto, pattern='^konfirmasi_|^produk_'))
+    app.add_handler(CallbackQueryHandler(konfirmasi_produk_manual, pattern='^manual_produk_'))
+    app.add_handler(CallbackQueryHandler(konfirmasi_produk_excel, pattern='^excel_produk_'))
     app.add_handler(MessageHandler(filters.Document.ALL, proses_excel))
     app.add_handler(MessageHandler(filters.Regex('📋 Lihat Stok'), lihat_stok))
     app.add_handler(MessageHandler(filters.Regex('📊 Lihat Laporan'), laporan))
