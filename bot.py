@@ -48,7 +48,8 @@ def get_sheet():
  JUAL_NAMA, JUAL_JUMLAH,
  PRODUK_PILIH, PRODUK_NAMA, PRODUK_SATUAN, PRODUK_HARGA_JUAL,
  KULAKAN_PILIH, KANTIN_PILIH, JUAL_PILIH,
- UBAH_HARGA_NAMA, UBAH_HARGA_BARU) = range(17)
+ UBAH_HARGA_NAMA, UBAH_HARGA_BARU,
+ SISA_PILIH, SISA_INPUT) = range(19)
 
 # ================================
 # MENU UTAMA
@@ -58,7 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ['📦 Catat Kulakan', '🏪 Stok ke Kantin'],
         ['💰 Catat Penjualan', '📊 Lihat Laporan'],
         ['📋 Lihat Stok', '➕ Tambah Produk'],
-        ['💲 Ubah Harga Jual'],
+        ['💲 Ubah Harga Jual', '🧮 Sisa Stok Kantin'],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text(
@@ -405,6 +406,13 @@ Jika satuan tidak ada, isi dengan "pcs".
 Jika harga tidak ada, isi dengan 0.
 Kembalikan JSON saja tanpa penjelasan."""
 
+        elif menu == 'sisa':
+            prompt = """Baca daftar sisa stok ini. Ekstrak semua item dalam format JSON:
+{
+    "items": [{"nama": "nama produk", "sisa": angka}]
+}
+Kembalikan JSON saja tanpa penjelasan."""
+
         response = groq_client.chat.completions.create(
             model='meta-llama/llama-4-scout-17b-16e-instruct',
             messages=[
@@ -477,6 +485,53 @@ Kembalikan JSON saja tanpa penjelasan."""
                 satuan = item.get('satuan', 'pcs')
                 harga = item.get('harga_jual', 0)
                 pesan += f'• {nama} ({satuan}) — Rp{harga:,}\n'
+
+        elif menu == 'sisa':
+            # Ambil data stok kantin hari ini untuk hitung terjual
+            sheet = get_sheet()
+            hari_ini = datetime.now(WIB).strftime('%Y-%m-%d')
+            kantin_hari_ini = sheet.worksheet('Kantin').get_all_records()
+            stok_masuk = {}
+            for row in kantin_hari_ini:
+                if str(row['Tanggal']).startswith(hari_ini):
+                    nama = norm_nama(row['Nama_Snack'])
+                    stok_masuk[nama] = stok_masuk.get(nama, 0) + int(row['Jumlah_Masuk'])
+
+            pesan += '🧮 *Rekap Sisa Stok Kantin:*\n\n'
+            terjual_list = []
+            total_pendapatan = 0
+
+            # Ambil harga dari Product
+            ws_produk = sheet.worksheet('Product')
+            data_produk = ws_produk.get_all_records()
+            harga_dict = {}
+            for p in data_produk:
+                harga_dict[norm_nama(p['Nama_Snack'])] = int(p.get('Harga_Jual', 0))
+
+            for item in hasil.get('items', []):
+                nama = norm_nama(item.get('nama', '-'))
+                sisa = int(item.get('sisa', 0))
+                masuk = stok_masuk.get(nama, 0)
+                terjual = max(0, masuk - sisa)
+                harga = harga_dict.get(nama, 0)
+                total = terjual * harga
+                total_pendapatan += total
+                terjual_list.append({
+                    'nama': nama, 'masuk': masuk,
+                    'sisa': sisa, 'terjual': terjual,
+                    'harga': harga, 'total': total
+                })
+                pesan += (
+                    f'🍿 *{nama}*\n'
+                    f'   Masuk  : {masuk} pcs\n'
+                    f'   Sisa   : {sisa} pcs\n'
+                    f'   Terjual: {terjual} pcs\n'
+                    f'   Total  : Rp{total:,}\n\n'
+                )
+
+            pesan += f'💰 *Total Pendapatan: Rp{total_pendapatan:,}*'
+            # Simpan data terjual sementara
+            context.user_data['sisa_terjual'] = terjual_list
 
         pesan += '\n\n_Data sudah benar?_'
 
@@ -758,6 +813,37 @@ async def simpan_data_foto(query, context):
                     parse_mode='Markdown'
                 )
             # Cleanup dan return lebih awal
+            context.user_data['waiting_foto'] = None
+            context.user_data['hasil_foto'] = None
+            context.user_data['menu_foto'] = None
+            context.user_data['produk_baru_list'] = None
+            context.user_data['produk_baru_index'] = 0
+            context.user_data['siap_simpan'] = False
+            return
+
+        elif menu == 'sisa':
+            # Simpan hasil hitung terjual ke sheet Penjualan
+            terjual_list = context.user_data.get('sisa_terjual', [])
+            ws = sheet.worksheet('Penjualan')
+            data_batch = []
+            for item in terjual_list:
+                if item['terjual'] > 0:
+                    data_batch.append([
+                        tanggal,
+                        item['nama'],
+                        item['terjual'],
+                        item['harga'],
+                        item['total']
+                    ])
+                    count += 1
+            if data_batch:
+                ws.append_rows(data_batch)
+            context.user_data['sisa_terjual'] = None
+            await query.edit_message_text(
+                f'✅ *Penjualan berhasil dicatat!*\n\n'
+                f'{count} produk tersimpan ke sheet Penjualan. 🎉',
+                parse_mode='Markdown'
+            )
             context.user_data['waiting_foto'] = None
             context.user_data['hasil_foto'] = None
             context.user_data['menu_foto'] = None
@@ -1192,6 +1278,218 @@ async def laporan_semua(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'❌ Gagal: {e}')
 
 # ================================
+# SISA STOK KANTIN
+# ================================
+async def sisa_stok_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏️ Manual", callback_data='sisa_manual'),
+            InlineKeyboardButton("📸 Foto", callback_data='sisa_foto'),
+        ],
+        [InlineKeyboardButton("❌ Batal", callback_data='sisa_batal')]
+    ])
+    await update.message.reply_text(
+        '🧮 *Sisa Stok Kantin*\n\n'
+        'Input sisa stok yang ada di kantin sekarang.\n'
+        'Bot akan otomatis hitung yang terjual!\n\n'
+        'Pilih cara input:',
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    return SISA_PILIH
+
+async def sisa_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pilihan = query.data
+
+    if pilihan == 'sisa_batal':
+        await query.edit_message_text('❌ Dibatalkan.')
+        return ConversationHandler.END
+
+    elif pilihan == 'sisa_foto':
+        await query.edit_message_text(
+            '📸 Kirim foto sisa stok kantin kamu!\n\n'
+            'Bisa berupa:\n'
+            '• Foto snack yang tersisa\n'
+            '• Tulisan tangan daftar sisa\n\n'
+            '_Ketik /batal untuk membatalkan_',
+            parse_mode='Markdown'
+        )
+        context.user_data['waiting_foto'] = 'sisa'
+        return ConversationHandler.END
+
+    elif pilihan == 'sisa_manual':
+        # Ambil daftar produk yang masuk kantin hari ini
+        try:
+            sheet = get_sheet()
+            hari_ini = datetime.now(WIB).strftime('%Y-%m-%d')
+            kantin_records = sheet.worksheet('Kantin').get_all_records()
+            stok_masuk = {}
+            for row in kantin_records:
+                if str(row['Tanggal']).startswith(hari_ini):
+                    nama = norm_nama(row['Nama_Snack'])
+                    stok_masuk[nama] = stok_masuk.get(nama, 0) + int(row['Jumlah_Masuk'])
+
+            if not stok_masuk:
+                await query.edit_message_text(
+                    '⚠️ Belum ada stok yang masuk kantin hari ini!\n\n'
+                    'Input stok dulu via menu 🏪 Stok ke Kantin.'
+                )
+                return ConversationHandler.END
+
+            # Simpan daftar produk untuk diproses satu per satu
+            context.user_data['sisa_stok_masuk'] = stok_masuk
+            context.user_data['sisa_produk_list'] = list(stok_masuk.keys())
+            context.user_data['sisa_produk_index'] = 0
+            context.user_data['sisa_hasil'] = []
+
+            nama_pertama = context.user_data['sisa_produk_list'][0]
+            masuk = stok_masuk[nama_pertama]
+            await query.edit_message_text(
+                f'✏️ *Input Sisa Stok Manual*\n\n'
+                f'🍿 *{nama_pertama}*\n'
+                f'Masuk tadi: {masuk} pcs\n\n'
+                f'Sekarang sisa berapa?\n\n'
+                f'_Ketik /batal untuk membatalkan_',
+                parse_mode='Markdown'
+            )
+            return SISA_INPUT
+
+        except Exception as e:
+            await query.edit_message_text(f'❌ Gagal: {e}')
+            return ConversationHandler.END
+
+async def sisa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.strip()
+    if teks.startswith('/'):
+        return SISA_INPUT
+    try:
+        sisa = int(teks)
+        produk_list = context.user_data['sisa_produk_list']
+        stok_masuk = context.user_data['sisa_stok_masuk']
+        index = context.user_data['sisa_produk_index']
+        nama = produk_list[index]
+        masuk = stok_masuk[nama]
+        terjual = max(0, masuk - sisa)
+
+        context.user_data['sisa_hasil'].append({
+            'nama': nama, 'masuk': masuk,
+            'sisa': sisa, 'terjual': terjual
+        })
+
+        index += 1
+        context.user_data['sisa_produk_index'] = index
+
+        # Masih ada produk berikutnya?
+        if index < len(produk_list):
+            nama_berikut = produk_list[index]
+            masuk_berikut = stok_masuk[nama_berikut]
+            await update.message.reply_text(
+                f'✅ *{nama}* — terjual {terjual} pcs\n\n'
+                f'🍿 *{nama_berikut}*\n'
+                f'Masuk tadi: {masuk_berikut} pcs\n\n'
+                f'Sekarang sisa berapa?',
+                parse_mode='Markdown'
+            )
+            return SISA_INPUT
+
+        # Semua produk sudah diinput — tampilkan rekap
+        hasil = context.user_data['sisa_hasil']
+        sheet = get_sheet()
+        ws_produk = sheet.worksheet('Product')
+        data_produk = ws_produk.get_all_records()
+        harga_dict = {norm_nama(p['Nama_Snack']): int(p.get('Harga_Jual', 0)) for p in data_produk}
+
+        pesan = '🧮 *Rekap Sisa Stok Kantin:*\n\n'
+        total_pendapatan = 0
+        terjual_list = []
+
+        for item in hasil:
+            nama_item = item['nama']
+            harga = harga_dict.get(nama_item, 0)
+            total = item['terjual'] * harga
+            total_pendapatan += total
+            terjual_list.append({
+                'nama': nama_item,
+                'masuk': item['masuk'],
+                'sisa': item['sisa'],
+                'terjual': item['terjual'],
+                'harga': harga,
+                'total': total
+            })
+            pesan += (
+                f'🍿 *{nama_item}*\n'
+                f'   Masuk  : {item["masuk"]} pcs\n'
+                f'   Sisa   : {item["sisa"]} pcs\n'
+                f'   Terjual: {item["terjual"]} pcs\n'
+                f'   Total  : Rp{total:,}\n\n'
+            )
+
+        pesan += f'💰 *Total Pendapatan: Rp{total_pendapatan:,}*\n\n_Data sudah benar?_'
+
+        context.user_data['sisa_terjual'] = terjual_list
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Ya, Simpan!", callback_data='sisa_simpan'),
+                InlineKeyboardButton("❌ Batal", callback_data='sisa_batal_simpan'),
+            ]
+        ])
+        await update.message.reply_text(pesan, parse_mode='Markdown', reply_markup=keyboard)
+        return ConversationHandler.END
+
+    except ValueError:
+        await update.message.reply_text('❌ Masukkan angka saja ya!')
+        return SISA_INPUT
+    except Exception as e:
+        await update.message.reply_text(f'❌ Gagal: {e}')
+        return ConversationHandler.END
+
+async def konfirmasi_sisa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == 'sisa_batal_simpan':
+        await query.edit_message_text('❌ Dibatalkan, tidak ada yang tersimpan.')
+        context.user_data['sisa_terjual'] = None
+        return
+
+    try:
+        terjual_list = context.user_data.get('sisa_terjual', [])
+        sheet = get_sheet()
+        tanggal = datetime.now(WIB).strftime('%Y-%m-%d %H:%M')
+        ws = sheet.worksheet('Penjualan')
+        data_batch = []
+        count = 0
+
+        for item in terjual_list:
+            if item['terjual'] > 0:
+                data_batch.append([
+                    tanggal,
+                    item['nama'],
+                    item['terjual'],
+                    item['harga'],
+                    item['total']
+                ])
+                count += 1
+
+        if data_batch:
+            ws.append_rows(data_batch)
+
+        await query.edit_message_text(
+            f'✅ *Penjualan berhasil dicatat!*\n\n'
+            f'{count} produk tersimpan ke sheet Penjualan. 🎉',
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        await query.edit_message_text(f'❌ Gagal simpan: {e}')
+
+    context.user_data['sisa_terjual'] = None
+    context.user_data['sisa_hasil'] = None
+
+# ================================
 # MAIN
 # ================================
 def main():
@@ -1250,6 +1548,15 @@ def main():
         fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
     )
 
+    sisa_stok_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex('🧮 Sisa Stok Kantin'), sisa_stok_start)],
+        states={
+            SISA_PILIH: [CallbackQueryHandler(sisa_pilih)],
+            SISA_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sisa_input)],
+        },
+        fallbacks=[CommandHandler('start', start), CommandHandler('batal', batal)]
+    )
+
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('batal', batal))
     app.add_handler(kulakan_handler)
@@ -1257,10 +1564,12 @@ def main():
     app.add_handler(jual_handler)
     app.add_handler(produk_handler)
     app.add_handler(ubah_harga_handler)
+    app.add_handler(sisa_stok_handler)
     app.add_handler(MessageHandler(filters.PHOTO, proses_foto))
     app.add_handler(CallbackQueryHandler(konfirmasi_foto, pattern='^konfirmasi_|^produk_'))
     app.add_handler(CallbackQueryHandler(konfirmasi_produk_manual, pattern='^manual_produk_'))
     app.add_handler(CallbackQueryHandler(konfirmasi_produk_excel, pattern='^excel_produk_'))
+    app.add_handler(CallbackQueryHandler(konfirmasi_sisa, pattern='^sisa_simpan|^sisa_batal_simpan'))
     app.add_handler(MessageHandler(filters.Document.ALL, proses_excel))
     app.add_handler(MessageHandler(filters.Regex('📋 Lihat Stok'), lihat_stok))
     app.add_handler(MessageHandler(filters.Regex('📊 Lihat Laporan'), laporan))
