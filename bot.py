@@ -10,8 +10,7 @@ from telegram.ext import (
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
-from google import genai
-from google.genai import types
+from groq import Groq
 import base64
 import openpyxl
 import io
@@ -27,8 +26,8 @@ WIB = pytz.timezone('Asia/Jakarta')
 def norm_nama(nama):
     return str(nama).strip().title()
 
-# Setup Gemini
-gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
+# Setup Groq
+groq_client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
 
 # Koneksi Google Sheets
 def get_sheet():
@@ -406,18 +405,29 @@ Jika satuan tidak ada, isi dengan "pcs".
 Jika harga tidak ada, isi dengan 0.
 Kembalikan JSON saja tanpa penjelasan."""
 
-        response = gemini_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[
-                types.Part.from_text(text=prompt),
-                types.Part.from_bytes(
-                    data=base64.b64decode(image_base64),
-                    mime_type='image/jpeg'
-                )
-            ]
+        response = groq_client.chat.completions.create(
+            model='meta-llama/llama-4-scout-17b-16e-instruct',
+            messages=[
+                {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': prompt
+                        },
+                        {
+                            'type': 'image_url',
+                            'image_url': {
+                                'url': f'data:image/jpeg;base64,{image_base64}'
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1024,
         )
 
-        hasil_text = response.text.strip()
+        hasil_text = response.choices[0].message.content.strip()
         if '```json' in hasil_text:
             hasil_text = hasil_text.split('```json')[1].split('```')[0].strip()
         elif '```' in hasil_text:
