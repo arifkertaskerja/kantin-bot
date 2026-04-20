@@ -487,15 +487,9 @@ Kembalikan JSON saja tanpa penjelasan."""
                 pesan += f'• {nama} ({satuan}) — Rp{harga:,}\n'
 
         elif menu == 'sisa':
-            # Ambil data stok kantin hari ini untuk hitung terjual
+            # Ambil stok kantin SAAT INI (sudah dikurangi penjualan sebelumnya)
             sheet = get_sheet()
-            hari_ini = datetime.now(WIB).strftime('%Y-%m-%d')
-            kantin_hari_ini = sheet.worksheet('Kantin').get_all_records()
-            stok_masuk = {}
-            for row in kantin_hari_ini:
-                if str(row['Tanggal']).startswith(hari_ini):
-                    nama = norm_nama(row['Nama_Snack'])
-                    stok_masuk[nama] = stok_masuk.get(nama, 0) + int(row['Jumlah_Masuk'])
+            stok_sekarang = get_stok_kantin_sekarang()
 
             pesan += '🧮 *Rekap Sisa Stok Kantin:*\n\n'
             terjual_list = []
@@ -510,23 +504,23 @@ Kembalikan JSON saja tanpa penjelasan."""
 
             for item in hasil.get('items', []):
                 nama = norm_nama(item.get('nama', '-'))
-                sisa = int(item.get('sisa', 0))
-                masuk = stok_masuk.get(nama, 0)
-                terjual = max(0, masuk - sisa)
+                sisa_fisik = int(item.get('sisa', 0))
+                stok_kini = stok_sekarang.get(nama, 0)
+                terjual = max(0, stok_kini - sisa_fisik)
                 harga = harga_dict.get(nama, 0)
                 total = terjual * harga
                 total_pendapatan += total
                 terjual_list.append({
-                    'nama': nama, 'masuk': masuk,
-                    'sisa': sisa, 'terjual': terjual,
+                    'nama': nama, 'stok_kini': stok_kini,
+                    'sisa': sisa_fisik, 'terjual': terjual,
                     'harga': harga, 'total': total
                 })
                 pesan += (
                     f'🍿 *{nama}*\n'
-                    f'   Masuk  : {masuk} pcs\n'
-                    f'   Sisa   : {sisa} pcs\n'
-                    f'   Terjual: {terjual} pcs\n'
-                    f'   Total  : Rp{total:,}\n\n'
+                    f'   Stok kantin: {stok_kini} pcs\n'
+                    f'   Sisa fisik : {sisa_fisik} pcs\n'
+                    f'   Terjual    : {terjual} pcs\n'
+                    f'   Total      : Rp{total:,}\n\n'
                 )
 
             pesan += f'💰 *Total Pendapatan: Rp{total_pendapatan:,}*'
@@ -553,7 +547,27 @@ Kembalikan JSON saja tanpa penjelasan."""
 # ================================
 # CEK & TAMBAH PRODUK OTOMATIS
 # ================================
-def get_daftar_produk():
+def get_stok_kantin_sekarang():
+    """Hitung stok kantin saat ini = total masuk - total terjual"""
+    try:
+        sheet = get_sheet()
+        kantin_records = sheet.worksheet('Kantin').get_all_records()
+        penjualan_records = sheet.worksheet('Penjualan').get_all_records()
+
+        stok = {}
+        for row in kantin_records:
+            nama = norm_nama(row['Nama_Snack'])
+            stok[nama] = stok.get(nama, 0) + int(row['Jumlah_Masuk'])
+        for row in penjualan_records:
+            nama = norm_nama(row['Nama_Snack'])
+            stok[nama] = stok.get(nama, 0) - int(row['Jumlah_Terjual'])
+
+        return stok
+    except Exception as e:
+        logger.error(f'Error get stok kantin: {e}')
+        return {}
+
+
     """Ambil semua nama produk dari sheet Produk"""
     try:
         sheet = get_sheet()
@@ -1320,36 +1334,30 @@ async def sisa_pilih(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     elif pilihan == 'sisa_manual':
-        # Ambil daftar produk yang masuk kantin hari ini
         try:
-            sheet = get_sheet()
-            hari_ini = datetime.now(WIB).strftime('%Y-%m-%d')
-            kantin_records = sheet.worksheet('Kantin').get_all_records()
-            stok_masuk = {}
-            for row in kantin_records:
-                if str(row['Tanggal']).startswith(hari_ini):
-                    nama = norm_nama(row['Nama_Snack'])
-                    stok_masuk[nama] = stok_masuk.get(nama, 0) + int(row['Jumlah_Masuk'])
+            # Ambil stok kantin SAAT INI (sudah dikurangi penjualan sebelumnya)
+            stok_sekarang = get_stok_kantin_sekarang()
+            # Filter hanya yang stoknya > 0
+            stok_ada = {k: v for k, v in stok_sekarang.items() if v > 0}
 
-            if not stok_masuk:
+            if not stok_ada:
                 await query.edit_message_text(
-                    '⚠️ Belum ada stok yang masuk kantin hari ini!\n\n'
+                    '⚠️ Tidak ada stok di kantin saat ini!\n\n'
                     'Input stok dulu via menu 🏪 Stok ke Kantin.'
                 )
                 return ConversationHandler.END
 
-            # Simpan daftar produk untuk diproses satu per satu
-            context.user_data['sisa_stok_masuk'] = stok_masuk
-            context.user_data['sisa_produk_list'] = list(stok_masuk.keys())
+            context.user_data['sisa_stok_masuk'] = stok_ada
+            context.user_data['sisa_produk_list'] = list(stok_ada.keys())
             context.user_data['sisa_produk_index'] = 0
             context.user_data['sisa_hasil'] = []
 
             nama_pertama = context.user_data['sisa_produk_list'][0]
-            masuk = stok_masuk[nama_pertama]
+            stok_kini = stok_ada[nama_pertama]
             await query.edit_message_text(
                 f'✏️ *Input Sisa Stok Manual*\n\n'
                 f'🍿 *{nama_pertama}*\n'
-                f'Masuk tadi: {masuk} pcs\n\n'
+                f'Stok kantin saat ini: {stok_kini} pcs\n\n'
                 f'Sekarang sisa berapa?\n\n'
                 f'_Ketik /batal untuk membatalkan_',
                 parse_mode='Markdown'
@@ -1365,17 +1373,17 @@ async def sisa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if teks.startswith('/'):
         return SISA_INPUT
     try:
-        sisa = int(teks)
+        sisa_fisik = int(teks)
         produk_list = context.user_data['sisa_produk_list']
-        stok_masuk = context.user_data['sisa_stok_masuk']
+        stok_sekarang = context.user_data['sisa_stok_masuk']
         index = context.user_data['sisa_produk_index']
         nama = produk_list[index]
-        masuk = stok_masuk[nama]
-        terjual = max(0, masuk - sisa)
+        stok_kini = stok_sekarang[nama]
+        terjual = max(0, stok_kini - sisa_fisik)
 
         context.user_data['sisa_hasil'].append({
-            'nama': nama, 'masuk': masuk,
-            'sisa': sisa, 'terjual': terjual
+            'nama': nama, 'stok_kini': stok_kini,
+            'sisa': sisa_fisik, 'terjual': terjual
         })
 
         index += 1
@@ -1384,11 +1392,11 @@ async def sisa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Masih ada produk berikutnya?
         if index < len(produk_list):
             nama_berikut = produk_list[index]
-            masuk_berikut = stok_masuk[nama_berikut]
+            stok_berikut = stok_sekarang[nama_berikut]
             await update.message.reply_text(
                 f'✅ *{nama}* — terjual {terjual} pcs\n\n'
                 f'🍿 *{nama_berikut}*\n'
-                f'Masuk tadi: {masuk_berikut} pcs\n\n'
+                f'Stok kantin saat ini: {stok_berikut} pcs\n\n'
                 f'Sekarang sisa berapa?',
                 parse_mode='Markdown'
             )
@@ -1412,7 +1420,7 @@ async def sisa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_pendapatan += total
             terjual_list.append({
                 'nama': nama_item,
-                'masuk': item['masuk'],
+                'stok_kini': item['stok_kini'],
                 'sisa': item['sisa'],
                 'terjual': item['terjual'],
                 'harga': harga,
@@ -1420,14 +1428,13 @@ async def sisa_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             })
             pesan += (
                 f'🍿 *{nama_item}*\n'
-                f'   Masuk  : {item["masuk"]} pcs\n'
-                f'   Sisa   : {item["sisa"]} pcs\n'
-                f'   Terjual: {item["terjual"]} pcs\n'
-                f'   Total  : Rp{total:,}\n\n'
+                f'   Stok kantin: {item["stok_kini"]} pcs\n'
+                f'   Sisa fisik : {item["sisa"]} pcs\n'
+                f'   Terjual    : {item["terjual"]} pcs\n'
+                f'   Total      : Rp{total:,}\n\n'
             )
 
         pesan += f'💰 *Total Pendapatan: Rp{total_pendapatan:,}*\n\n_Data sudah benar?_'
-
         context.user_data['sisa_terjual'] = terjual_list
 
         keyboard = InlineKeyboardMarkup([
