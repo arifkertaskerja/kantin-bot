@@ -566,8 +566,8 @@ def get_stok_kantin_sekarang():
     except Exception as e:
         logger.error(f'Error get stok kantin: {e}')
         return {}
-
-
+        
+def get_daftar_produk():
     """Ambil semua nama produk dari sheet Produk"""
     try:
         sheet = get_sheet()
